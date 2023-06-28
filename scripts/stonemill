@@ -227,6 +227,7 @@ terraform.tfstate*
 */modules/*
 */node_modules/*
 */dist/*
+*/__pycache__/*
 ''')
 
 base_lambda_module = Definition("infrastructure/main.tf", append=True, text='''
@@ -854,15 +855,31 @@ sys.path.append('modules')
 
 import uuid
 import datetime
-from graphene import ObjectType, String, Schema, List
+from graphene import ObjectType, Field, String, Schema, List
 from authorization import *
 from models import *
 
+class Userdata(ObjectType):
+  id = String()
+  email = String()
+  created_at = String()
+
 class Query(ObjectType):
-  verify = String()
+  current_user = Field(Userdata)
+
   @authorized('customer')
-  def resolve_verify(root, info):
-    return 'verified'
+  def resolve_current_user(root, info):
+    try:
+      print('[i] querying user by id:', info.context['parsed_authorization']['id'])
+      user = UserModel.get(info.context['parsed_authorization']['id'])
+      return Userdata(
+        id=user.id,
+        email=user.email,
+        created_at=user.created_at,
+      )
+    except UserModel.DoesNotExist:
+      print('[!] user not found!')
+      return None
 
 class Mutation(ObjectType):
   login_user = String(email=String(), password=String())
@@ -963,7 +980,7 @@ from pynamodb.attributes import UnicodeAttribute, UTCDateTimeAttribute
 
 class UserModelIndex(GlobalSecondaryIndex):
   class Meta:
-    index_name = os.environ.get('USERS_TABLE_EMAIL_INDEX')
+    index_name = os.environ.get('USERS_TABLE_INDEX')
     projection = KeysOnlyProjection()
   email = UnicodeAttribute(hash_key=True)
 
@@ -991,7 +1008,7 @@ curl -X POST "$INVOKE_URL" -H 'content-type: application/json' -H "authorization
 # token="YOUR_TOKEN_HERE"
 # curl -X POST "$INVOKE_URL" -H 'content-type: application/json' -H "authorization: $token" -d '{"query":"{ verify }"}'
 ''')
-usermanager_lambda_unit_test = Definition("{{lambda_name}}/test.py", append=True, text='''#!/usr/bin/env python3
+usermanager_lambda_unit_test = Definition("{{lambda_name}}/test.py", append=True, ignore_missing=True, text='''#!/usr/bin/env python3
 import sys
 sys.path.append('modules')
 import os
@@ -1036,8 +1053,8 @@ res = schema.execute('mutation { loginUser(email:"' + email + '", password:"' + 
 print(res)
 auth_token = res['data']['loginUser']
 
-print('[---------] testing verify')
-res = schema.execute('{ verify }', context={ 'authorization': auth_token }).formatted
+print('[---------] testing currentUser')
+res = schema.execute('{ currentUser { id createdAt email } }', context={ 'authorization': auth_token }).formatted
 print(res)
 
 print('[---------] testing forgotPassword')
@@ -1064,12 +1081,40 @@ def get_model_by_class(object_model, id, owner_id):
     print('[!] model owner incorrect')
     return None
 
+def get_model_by_owner(object_model, owner_id):
+  print('[i] getting ', object_model ,'by owner:', owner_id)
+  objs = [ o for o in object_model.index.query(owner_id) ]
+  if len(objs) < 1:
+    print('[!] model not found')
+    return None
+  try:
+    model = object_model.get(objs[0].id)
+    print('[+] model found')
+  except object_model.DoesNotExist:
+    print('[!] model not found')
+    return None
+  if model.owner_id != owner_id:
+    print('[!] model owner incorrect')
+    return None
+  return model
+
 def with_model(object_model):
   def inner_with_object(f):
     def wrapper(root, info, id, *args, **kwargs):
       model = get_model_by_class(object_model, id, info.context['parsed_authorization']['id'])
       if model is None:
-        raise Exception('not found')
+        return None
+      else:
+        return f(root, info, model, *args, **kwargs)
+    return wrapper
+  return inner_with_object
+
+def with_singleton_model(object_model):
+  def inner_with_object(f):
+    def wrapper(root, info, *args, **kwargs):
+      model = get_model_by_owner(object_model, info.context['parsed_authorization']['id'])
+      if model is None:
+        return None
       else:
         return f(root, info, model, *args, **kwargs)
     return wrapper
@@ -1078,7 +1123,14 @@ def with_model(object_model):
 
 crud_lambda_models = Definition("{{lambda_name}}/models.py", append=True, ignore_missing=True, text='''import os
 from pynamodb.models import Model
-from pynamodb.attributes import UnicodeAttribute
+from pynamodb.indexes import GlobalSecondaryIndex, KeysOnlyProjection
+from pynamodb.attributes import UnicodeAttribute, UTCDateTimeAttribute
+
+class {{table_name}}ModelIndex(GlobalSecondaryIndex):
+  class Meta:
+    index_name = os.environ.get('{{table_name}}_INDEX')
+    projection = KeysOnlyProjection()
+  owner_id = UnicodeAttribute(hash_key=True)
 
 class {{table_name}}Model(Model):
   class Meta:
@@ -1088,53 +1140,60 @@ class {{table_name}}Model(Model):
   content = UnicodeAttribute()
 ''')
 
-crud_lambda_schema = Definition("{{lambda_name}}/schema.py", append=True, text='''
-
+crud_lambda_schema = Definition("{{lambda_name}}/schema.py", append=True, text='''import sys
+sys.path.append('modules')
 import uuid
-from graphene import ObjectType, String, Schema, List
-from authorization import authorized, with_model, sign_jwt_authorization, hash_new_password, verify_password
-from models import {{table_name}}Model
+import datetime
 
-  add_{{table_name}} = String(content=String())
+from graphene import ObjectType, Field, String, Schema, List
+from authorization import *
+from models import *
+
+class Query(ObjectType):
   list_{{table_name}}s = List(String)
-  get_{{table_name}} = String(id=String())
+  {{table_name}} = String(id=String())
+
+  @authorized('customer')
+  def resolve_list_{{table_name}}s(root, info):
+    results = []
+    print("[i] querying dashboards for user:", info.context['parsed_authorization']['id'])
+    for {{table_name}} in {{table_name}}Model.index.query(info.context['parsed_authorization']['id']):
+      results.append({{table_name}}.id)
+    print("[+] got dashboards:", results)
+    return results
+  @authorized('customer')
+  @with_model({{table_name}}Model)
+  def resolve_{{table_name}}(root, info, {{table_name}}):
+    return {{table_name}}.content
+
+class Mutation(ObjectType):
+  add_{{table_name}} = String(content=String())
   update_{{table_name}} = String(id=String(), content=String())
   delete_{{table_name}} = String(id=String())
 
   @authorized('customer')
   def resolve_add_{{table_name}}(root, info, content):
     new_id = str(uuid.uuid4())
-    print('[i] adding {{table_name}}:', new_id, 'for user:', info.context['parsed_authorization']['email'])
-    dashboard = {{table_name}}Model(new_id, owner_id=info.context['parsed_authorization']['email'], content=content)
-    dashboard.save()
-    print('[+] {{table_name}} added:', dashboard)
+    print('[i] adding {{table_name}}:', new_id, 'for user:', info.context['parsed_authorization']['id'])
+    {{table_name}} = {{table_name}}Model(new_id, owner_id=info.context['parsed_authorization']['id'], content=content)
+    {{table_name}}.save()
+    print('[+] {{table_name}} added:', {{table_name}})
     return new_id
   @authorized('customer')
-  def resolve_list_{{table_name}}s(root, info):
-    results = []
-    print("[i] querying dashboards for user:", info.context['parsed_authorization']['email'])
-    for dashboard in {{table_name}}Model.scan({{table_name}}Model.owner_id == info.context['parsed_authorization']['email']):
-      results.append(dashboard.id)
-    print("[+] got dashboards:", results)
-    return results
-  @authorized('customer')
   @with_model({{table_name}}Model)
-  def resolve_get_{{table_name}}(root, info, dashboard):
-    return dashboard.content
-  @authorized('customer')
-  @with_model({{table_name}}Model)
-  def resolve_update_{{table_name}}(root, info, dashboard, content):
-    print("[i] updating dashboard:", dashboard.id)
-    dashboard.content = content
-    dashboard.save()
+  def resolve_update_{{table_name}}(root, info, {{table_name}}, content):
+    print("[i] updating {{table_name}}:", {{table_name}}.id)
+    {{table_name}}.content = content
+    {{table_name}}.save()
     return 'ok'
   @authorized('customer')
   @with_model({{table_name}}Model)
-  def resolve_delete_{{table_name}}(root, info, dashboard):
-    print("[i] deleting dashboard:", dashboard.id)
-    dashboard.delete()
+  def resolve_delete_{{table_name}}(root, info, {{table_name}}):
+    print("[i] deleting {{table_name}}:", {{table_name}}.id)
+    {{table_name}}.delete()
     return 'ok'
 
+schema = Schema(query=Query, mutation=Mutation)
 ''')
 crud_lambda_test = Definition("scripts/test.sh", append=True, text='''
 INVOKE_URL=$(cat infrastructure/terraform.tfstate | jq -r '.outputs.usermanager_lambda_api_url.value')
@@ -1145,6 +1204,126 @@ curl -X POST "$INVOKE_URL" -H 'content-type: application/json' -H "authorization
 curl -X POST "$INVOKE_URL" -H 'content-type: application/json' -H "authorization: $token" -d '{"query":"{ getUserDashboard(id:\"13254f58-fa90-406b-bbf9-e1b6291efee1\") }"}'
 curl -X POST "$INVOKE_URL" -H 'content-type: application/json' -H "authorization: $token" -d '{"query":"{ updateUserDashboard(id:\"13254f58-fa90-406b-bbf9-e1b6291efee1\", content:\"zxcvzxcv\") }"}'
 curl -X POST "$INVOKE_URL" -H 'content-type: application/json' -H "authorization: $token" -d '{"query":"{ deleteUserDashboard(id:\"13254f58-fa90-406b-bbf9-e1b6291efee1\") }"}'
+''')
+crud_lambda_unit_test = Definition("{{lambda_name}}/test.py", append=True, ignore_missing=True, text='''#!/usr/bin/env python3
+import sys
+sys.path.append('modules')
+import os
+import json
+
+print('[i] loading environment from terraform state...')
+with open('../infrastructure/terraform.tfstate', 'r') as f:
+  data = json.loads(f.read())
+
+for k in data['outputs']:
+  # print(k, data['outputs'][k]['value'])
+  os.environ[k.upper()] = data['outputs'][k]['value']
+print('[+] loaded {} values from state!'.format(len(data['outputs'])))
+
+os.environ['API_DOMAIN_NAME'] = 'test.local'
+os.environ['API_AUTHORIZATION_SECRET_KEY'] = 'TESTKEY'
+print('[+] added test secret key and domain name')
+
+
+print('[i] importing runtime modules...')
+from schema import schema
+from models import *
+print('[+] import successful')
+
+print('[---------] testing add{{table_name}}')
+res = schema.execute('mutation { add{{table_name}}(content:"hello world") }', context={ 'authorization': auth_token }).formatted
+print(res)
+
+print('[---------] testing list{{table_name}}s')
+res = schema.execute('{ list{{table_name}}s }', context={ 'authorization': auth_token }).formatted
+print(res)
+{{table_name}}_id = res['data']['list{{table_name}}s'][0]
+
+print('[---------] testing {{table_name}}')
+res = schema.execute('{ {{table_name}}(id:"'+{{table_name}}_id+'") }', context={ 'authorization': auth_token }).formatted
+print(res)
+
+print('[---------] testing delete{{table_name}}')
+res = schema.execute('mutation { delete{{table_name}}(id:"'+{{table_name}}_id+'") }', context={ 'authorization': auth_token }).formatted
+print(res)
+''')
+
+singleton_crud_lambda_schema = Definition("{{lambda_name}}/schema.py", append=True, text='''import sys
+sys.path.append('modules')
+import uuid
+import datetime
+from graphene import ObjectType, Field, String, Schema, List
+from authorization import *
+from models import *
+
+class Query(ObjectType):
+  {{table_name}} = String()
+
+  @authorized('customer')
+  @with_singleton_model({{table_name}}Model)
+  def resolve_{{table_name}}(root, info, {{table_name}}):
+    return {{table_name}}.content
+
+class Mutation(ObjectType):
+  add_{{table_name}} = String(content=String())
+  update_{{table_name}} = String(content=String())
+
+  @authorized('customer')
+  def resolve_add_{{table_name}}(root, info, content):
+    existing_model = get_model_by_owner({{table_name}}Model, info.context['parsed_authorization']['id'])
+    if existing_model is not None:
+      print('[!] singleton already exists:', existing_model)
+      raise Exception('already exists')
+    new_id = str(uuid.uuid4())
+    print('[i] adding {{table_name}}:', new_id, 'for user:', info.context['parsed_authorization']['id'])
+    {{table_name}} = {{table_name}}Model(new_id, owner_id=info.context['parsed_authorization']['id'], content=content)
+    {{table_name}}.save()
+    print('[+] {{table_name}} added:', {{table_name}})
+    return new_id
+  @authorized('customer')
+  @with_singleton_model({{table_name}}Model)
+  def resolve_update_{{table_name}}(root, info, {{table_name}}, content):
+    print("[i] updating {{table_name}}:", {{table_name}}.id)
+    {{table_name}}.content = content
+    {{table_name}}.save()
+    return 'ok'
+''')
+singleton_crud_lambda_unit_test = Definition("{{lambda_name}}/test.py", append=True, ignore_missing=True, text='''#!/usr/bin/env python3
+import sys
+sys.path.append('modules')
+import os
+import json
+
+print('[i] loading environment from terraform state...')
+with open('../infrastructure/terraform.tfstate', 'r') as f:
+  data = json.loads(f.read())
+
+for k in data['outputs']:
+  # print(k, data['outputs'][k]['value'])
+  os.environ[k.upper()] = data['outputs'][k]['value']
+print('[+] loaded {} values from state!'.format(len(data['outputs'])))
+
+os.environ['API_DOMAIN_NAME'] = 'test.local'
+os.environ['API_AUTHORIZATION_SECRET_KEY'] = 'TESTKEY'
+print('[+] added test secret key and domain name')
+
+
+print('[i] importing runtime modules...')
+from schema import schema
+from models import *
+print('[+] import successful')
+
+print('[---------] testing add{{table_name}}')
+res = schema.execute('mutation { add{{table_name}}(content:"asdf") }', context={ 'authorization': auth_token }).formatted
+print(res)
+
+print('[---------] testing {{table_name}}')
+res = schema.execute('{ {{table_name}} }', context={ 'authorization': auth_token }).formatted
+print(res)
+
+print('[---------] testing update{{table_name}}')
+res = schema.execute('mutation { update{{table_name}}(content:"hello world!") }', context={ 'authorization': auth_token }).formatted
+print(res)
 ''')
 
 
@@ -1737,6 +1916,22 @@ output "{{table_name}}_widget_json" {
 EOF
 }
 ''')
+dynamodb_table_test = Definition("scripts/test.sh", append=True, text='''
+TABLE_ID=$(cat infrastructure/terraform.tfstate | jq -r '.outputs.{{table_name}}_table_id.value')
+echo "table id: $TABLE_ID"
+
+# insert/update an item
+aws dynamodb update-item --table-name "$TABLE_ID" --region us-east-1 \\
+  --key '{"{{hash_key}}": {"S": "mykey"} }' \\
+  --update-expression 'SET #var = :var' \\
+  --expression-attribute-names '{ "#var": "myvar" }' \\
+  --expression-attribute-values '{ ":var": {"S": "myvalue"} }'
+# get a single item
+aws dynamodb get-item --table-name "$TABLE_ID" --region us-east-1 --key '{"{{hash_key}}": {"S": "mykey"} }' --attributes-to-get '["{{hash_key}}","myvar"]'
+# list the table
+aws dynamodb scan --table-name "$TABLE_ID" --region us-east-1
+
+''')
 
 indexed_dynamodb_table_module = Definition("infrastructure/main.tf", append_if_not_exist=True, text='''
 output "{{table_name}}_table_id" { value = "${module.database_tables.{{table_name}}_table_id}" }
@@ -1792,23 +1987,6 @@ output "{{table_name}}_widget_json" {
   }
 EOF
 }
-''')
-
-dynamodb_table_test = Definition("scripts/test.sh", append=True, text='''
-TABLE_ID=$(cat infrastructure/terraform.tfstate | jq -r '.outputs.{{table_name}}_table_id.value')
-echo "table id: $TABLE_ID"
-
-# insert/update an item
-aws dynamodb update-item --table-name "$TABLE_ID" --region us-east-1 \\
-  --key '{"{{hash_key}}": {"S": "mykey"} }' \\
-  --update-expression 'SET #var = :var' \\
-  --expression-attribute-names '{ "#var": "myvar" }' \\
-  --expression-attribute-values '{ ":var": {"S": "myvalue"} }'
-# get a single item
-aws dynamodb get-item --table-name "$TABLE_ID" --region us-east-1 --key '{"{{hash_key}}": {"S": "mykey"} }' --attributes-to-get '["{{hash_key}}","myvar"]'
-# list the table
-aws dynamodb scan --table-name "$TABLE_ID" --region us-east-1
-
 ''')
 
 
@@ -2324,15 +2502,56 @@ crud_ddb_table_template = TemplateDefinitions('{lambda_name} lambda', {
 }, [
   dynamodb_tables_header_module,
   dynamodb_tables_header_definition,
-  dynamodb_table_module,
-  dynamodb_table_definition,
+  indexed_dynamodb_table_module,
+  indexed_dynamodb_table_definition,
   dynamodb_table_test,
   crud_lambda_authorization,
   crud_lambda_models,
   crud_lambda_schema,
   crud_lambda_test,
+  crud_lambda_unit_test,
 ], '''
 CRUD dynamodb table scaffolded...
+graphql endpoint additions added to {table_name} lambda...
+test the crud apis by executing `./scripts/test.sh`
+
+''', '''
+remember to add to the policy the following:
+{
+  "Effect" = "Allow",
+  "Action" = [
+    "dynamodb:GetItem",
+    "dynamodb:PutItem",
+    "dynamodb:UpdateItem",
+    "dynamodb:DeleteItem",
+    "dynamodb:Scan",
+    "dynamodb:Query"
+  ],
+  "Resource" = [
+    "arn:aws:dynamodb:us-east-1:*:table/${var.arg_table}"
+  ]
+}
+
+enjoy responsibly...
+''', fixed_args={ 'hash_key': 'id' })
+
+
+singleton_crud_ddb_table_template = TemplateDefinitions('{lambda_name} lambda', {
+  'lambda_name': r"^[a-zA-Z_][a-zA-Z0-9_]+$",
+  'table_name': r"^[a-zA-Z_][a-zA-Z0-9_]+$",
+}, [
+  dynamodb_tables_header_module,
+  dynamodb_tables_header_definition,
+  indexed_dynamodb_table_module,
+  indexed_dynamodb_table_definition,
+  dynamodb_table_test,
+  crud_lambda_authorization,
+  crud_lambda_models,
+  singleton_crud_lambda_schema,
+  crud_lambda_test,
+  singleton_crud_lambda_unit_test,
+], '''
+singleton CRUD dynamodb table scaffolded...
 graphql endpoint additions added to {table_name} lambda...
 test the crud apis by executing `./scripts/test.sh`
 
@@ -2438,6 +2657,7 @@ try:
   parser.add_argument('--indexed-dynamodb-table', nargs=2, help='creates a dynamodb table with a global secondary index;\t stonemill --indexed-dynamodb-table my_accounts account_id email')
   parser.add_argument('--usermanager-ddb-table', nargs=2, help='creates a users dynamodb table with graphql endpoints for addUser and login;\n\t uses strong password salting and hashing for security;\t stonemill --usermanager-ddb-table my_lambda users')
   parser.add_argument('--crud-ddb-table', nargs=2, help='creates a dynamodb table with graphql endpoints for Create/Read/Update/Delete/List;\n\t uses uuid4 for ids and has strong authentication on the user;\t stonemill --crud-ddb-table my_lambda my_model')
+  parser.add_argument('--singleton-crud-ddb-table', nargs=2, help='creates a dynamodb table with graphql endpoints for Create/Read/Update;\n\t only one singleton exists per user;\n\t uses uuid4 for ids and has strong authentication on the user;\t stonemill --singleton-crud-ddb-table my_lambda my_singleton')
   parser.add_argument('--firehose-s3', nargs=1, help='creates a kinesis firehose that puts to an s3 bucket;\t stonemill --firehose-s3 my_firehose_name')
   parser.add_argument('--lambda-schedule-event', nargs=1, help='creates an eventbridge job that triggers lambda on a schedule;\t stonemill --lambda-schedule-event my_lambda')
   parser.add_argument('--githubactions-deploy', nargs=2, help='creates the deployment workflows for github actions to push the terraform infrastructure;\t stonemill --githubactions-deploy "arn:aws:iam::123456789012:role/GithubActionsAccessRole" "tfstate-abcdef0123456789"\n\t follow this guide for how to create your role and secure it to only allow github access: https://benoitboure.com/securely-access-your-aws-resources-from-github-actions')
@@ -2490,6 +2710,10 @@ try:
   elif args.crud_ddb_table:
     template_args = crud_ddb_table_template.parse_arguments(lambda_name = args.crud_ddb_table[0], table_name = args.crud_ddb_table[1])
     crud_ddb_table_template.mill_template(template_args)
+
+  elif args.singleton_crud_ddb_table:
+    template_args = singleton_crud_ddb_table_template.parse_arguments(lambda_name = args.crud_ddb_table[0], table_name = args.crud_ddb_table[1])
+    singleton_crud_ddb_table_template.mill_template(template_args)
 
   elif args.firehose_s3:
     template_args = firehose_s3_template.parse_arguments(firehose_name = args.firehose_s3[0])
