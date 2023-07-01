@@ -88,6 +88,7 @@ class TemplateDefinitions(object):
     self.definitions = definitions
     self.post_message = post_message
     self.unformatted_post_message = unformatted_post_message
+    self.fixed_args = fixed_args
 
   def parse_arguments(self, **template_args):
     parsed_args = { **self.fixed_args }
@@ -126,11 +127,15 @@ base_terraform_main = Definition("infrastructure/main.tf", text='''provider "aws
 variable "company_name" { default = "{{company_name}}" }
 variable "group_name" { default = "{{infra_name}}" }
 variable "stage" { default = "beta" }
+variable "root_domain" { default = "example.org" }
 
 locals {
   metrics_path = "${var.company_name}/${local.infragroup_fullname}"
   infragroup_fullname = "${var.group_name}-${var.stage}"
+  domain_name = (var.stage == "prod" ? var.root_domain : "${var.stage}.${var.root_domain}")
 }
+
+output "domain_name" { value = local.domain_name }
 
 # resource group to track active infrastructure resources
 resource "aws_resourcegroups_group" "infra_resource_group" {
@@ -167,21 +172,21 @@ include .env
 export
 
 configure:
-  @aws configure set aws_access_key_id ${AWS_ACCESS_ID}
-  @aws configure set aws_secret_access_key ${AWS_ACCESS_KEY}
-  ./scripts/aws-authenticate-mfa.sh
+\t@aws configure set aws_access_key_id ${AWS_ACCESS_ID}
+\t@aws configure set aws_secret_access_key ${AWS_ACCESS_KEY}
+\t./scripts/aws-authenticate-mfa.sh
 
 bash: configure
-  bash
+\tbash
 
 deploy:
-  ./scripts/deploy.sh -deploy
+\t./scripts/deploy.sh -deploy
 
 destroy:
-  ./scripts/deploy.sh -destroy
+\t./scripts/deploy.sh -destroy
 
 clean:
-  rm -rf build .keys infrastructure/.terraform */modules */node_modules */dist infrastructure/terraform.tfstate*
+\trm -rf build .keys infrastructure/.terraform */modules */node_modules */dist infrastructure/terraform.tfstate*
 
 build:
 
@@ -244,8 +249,8 @@ module "{{lambda_name}}" {
 
 base_lambda_makefile = Definition("./Makefile", append=True, text='''
 build_{{lambda_name}}:
-  -mkdir build
-  cd {{lambda_name}} && bash ./build.sh
+\t-mkdir build
+\tcd {{lambda_name}} && bash ./build.sh
 ''')
 
 base_lambda_definition = Definition("infrastructure/{{lambda_name}}/{{lambda_name}}.tf", text='''
@@ -451,7 +456,7 @@ def route_request(event):
   
   # handle the routing
   print('[i] executing route: ' + action)
-  return route_fun(data)
+  return route_fun(data, event)
 ''')
 
 base_lambda_lib = Definition("{{lambda_name}}/lambda_routing.py", text='''all_lambda_routes = {}
@@ -482,7 +487,7 @@ def get_route(route):
 base_lambda_routes = Definition("{{lambda_name}}/routes.py", text='''from lambda_routing import lambda_route, authenticated_lambda_route
 
 @lambda_route('/{{lambda_name}}/hello')
-def hello(data):
+def hello(data, event):
   if data.get('msg') is None:
     print('[-] missing message')
     return { 'success': True, 'msg': 'hello world!' }
@@ -708,7 +713,9 @@ cloudwatch_client = boto3.client('cloudwatch')
 metrics_group = os.environ.get('METRICS_GROUP')
 
 def internal_lambda_handler(event, context):
-  result = schema.execute(json.loads(event['body'])['query'], context={ 'authorization': event['headers'].get('authorization') })
+  result = schema.execute(body['query'],
+      variables=body.get('variables', {}),
+      context={ 'authorization': event['headers'].get('authorization') })
   # print('[r] graphql result:', result.data)
   return result.formatted
 
@@ -1701,9 +1708,9 @@ output "{{server_name}}_instance_id" { value = module.{{server_name}}.instance_i
 ''')
 ec2_server_makefile = Definition("./Makefile", append=True, text='''
 build_{{server_name}}_package:
-  -mkdir build
-  zip build/{{server_name}}.zip -FSr {{server_name}}/
-  ./scripts/create-keys.sh "{{server_name}}_key"
+\t-mkdir build
+\tzip build/{{server_name}}.zip -FSr {{server_name}}/
+\t./scripts/create-keys.sh "{{server_name}}_key"
 ''')
 ec2_server_definition = Definition("infrastructure/{{server_name}}/{{server_name}}.tf", text='''
 variable "infragroup_fullname" { type = string }
@@ -2181,6 +2188,16 @@ jobs:
 
 ''')
 
+ses_domain_module = Definition("infrastructure/main.tf", append=True, text='''
+resource "aws_ses_domain_identity" "ses_domain_identity" {
+  domain = local.domain_name
+}
+
+resource "aws_ses_domain_dkim" "ses_domain_dkim" {
+  domain = local.domain_name
+}
+''')
+
 
 
 
@@ -2635,6 +2652,33 @@ once your role and state bucket are set up, you should just push to your `deploy
 use `aws s3 cp s3://{state_bucket}/terraform.tfstate infrastructure/terraform.tfstate` in your test.sh to keep it working
 ''')
 
+ses_domain_template = TemplateDefinitions('ses domain', {}, [
+  ses_domain_module,
+], '''
+Make sure to enter your AWS account and get the necessary DKIM records to very.
+After verifying, make sure to add a test identity, before leaving sandbox and entering live.
+''', '''
+insert SES emails with:
+```
+ses_client = boto3.client('ses', region_name='us-east-1')
+res = ses_client.send_email(
+  Destination={ 'ToAddresses': [ email_address ] },
+  Source='noreply@analytics.nixalgo.com',
+  Message={
+    'Subject': { 'Charset': 'UTF-8', 'Data': email_subject },
+    'Body': { 'Html': { 'Charset': 'UTF-8', 'Data': email_body } },
+  },
+)
+```
+
+and add the following permission to your lambda:
+{
+  "Effect" = "Allow",
+  "Action" = "ses:SendEmail",
+  Resource = "*"
+},
+''')
+
 
 ####################################################################################################
 # main
@@ -2661,6 +2705,7 @@ try:
   parser.add_argument('--firehose-s3', nargs=1, help='creates a kinesis firehose that puts to an s3 bucket;\t stonemill --firehose-s3 my_firehose_name')
   parser.add_argument('--lambda-schedule-event', nargs=1, help='creates an eventbridge job that triggers lambda on a schedule;\t stonemill --lambda-schedule-event my_lambda')
   parser.add_argument('--githubactions-deploy', nargs=2, help='creates the deployment workflows for github actions to push the terraform infrastructure;\t stonemill --githubactions-deploy "arn:aws:iam::123456789012:role/GithubActionsAccessRole" "tfstate-abcdef0123456789"\n\t follow this guide for how to create your role and secure it to only allow github access: https://benoitboure.com/securely-access-your-aws-resources-from-github-actions')
+  parser.add_argument('--ses-domain', nargs=0, help='creates the DKIM records to start the validation process for an SES domain;\t stonemill --ses-domain')
   args = parser.parse_args()
 
   if args.infra_base:
@@ -2726,6 +2771,10 @@ try:
   elif args.githubactions_deploy:
     template_args = githubactions_deploy_template.parse_arguments(role_arn = args.githubactions_deploy[0], state_bucket = args.githubactions_deploy[1])
     githubactions_deploy_template.mill_template(template_args)
+
+  elif args.ses_domain:
+    template_args = ses_domain_template.parse_arguments()
+    ses_domain_template.mill_template(template_args)
 
   else:
     parser.print_help()
