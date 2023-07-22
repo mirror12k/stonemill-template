@@ -9,6 +9,12 @@ if [[ "$ACTION" == "-deploy" ]]; then
 	terraform init
 	echo "[i] running deployment!"
 	terraform apply
+elif [[ "$ACTION" == "-autodeploy" ]]; then
+	cd infrastructure
+	echo "[i] running init"
+	terraform init
+	echo "[i] running auto deployment!"
+	terraform apply -auto-approve
 elif [[ "$ACTION" == "-destroy" ]]; then
 	cd infrastructure
 	echo "[i] running init"
