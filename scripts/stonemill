@@ -186,7 +186,7 @@ destroy:
 \t./scripts/deploy.sh -destroy
 
 clean:
-\trm -rf build .keys infrastructure/.terraform */modules */node_modules */dist infrastructure/terraform.tfstate*
+\trm -rf build .keys infrastructure/.terraform infrastructure/terraform.tfstate* src/*/modules src/*/node_modules src/*/dist
 
 build:
 
@@ -204,7 +204,7 @@ RUN apt-get update && apt-get install -y gnupg software-properties-common curl \
   && apt-get update \\
   && apt-get install -y nano jq zip make \\
   && apt-get install -y terraform \\
-  && apt-get install -y python3-venv \\
+  && apt-get install -y python3-venv python3-pip \\
   && apt-get install -y openssh-client \\
   && apt autoclean \\
   && apt autoremove \\
@@ -228,11 +228,13 @@ CMD make bash
 
 base_gitignore = Definition("./.gitignore", text='''build
 .*
+!.github/
+!.gitignore
 terraform.tfstate*
-*/modules/*
-*/node_modules/*
-*/dist/*
-*/__pycache__/*
+src/*/modules/*
+src/*/node_modules/*
+src/*/dist/*
+src/*/__pycache__/*
 ''')
 
 base_lambda_module = Definition("infrastructure/main.tf", append=True, text='''
@@ -250,7 +252,7 @@ module "{{lambda_name}}" {
 base_lambda_makefile = Definition("./Makefile", append=True, text='''
 build_{{lambda_name}}:
 \t-mkdir build
-\tcd {{lambda_name}} && bash ./build.sh
+\tcd src/{{lambda_name}} && bash ./build.sh
 ''')
 
 base_lambda_definition = Definition("infrastructure/{{lambda_name}}/{{lambda_name}}.tf", text='''
@@ -382,7 +384,7 @@ EOF
 
 ''')
 
-base_lambda_main = Definition("{{lambda_name}}/main.py", text='''import sys
+base_lambda_main = Definition("src/{{lambda_name}}/main.py", text='''import sys
 sys.path.append('modules')
 import os
 import json
@@ -459,7 +461,7 @@ def route_request(event):
   return route_fun(data, event)
 ''')
 
-base_lambda_lib = Definition("{{lambda_name}}/lambda_routing.py", text='''all_lambda_routes = {}
+base_lambda_lib = Definition("src/{{lambda_name}}/lambda_routing.py", text='''all_lambda_routes = {}
 def lambda_route(route):
   def lambda_route_lambda_route(f):
     def wrapper(*args, **kwargs):
@@ -484,7 +486,7 @@ def get_route(route):
   return all_lambda_routes.get(route)
 ''')
 
-base_lambda_routes = Definition("{{lambda_name}}/routes.py", text='''from lambda_routing import lambda_route, authenticated_lambda_route
+base_lambda_routes = Definition("src/{{lambda_name}}/routes.py", text='''from lambda_routing import lambda_route, authenticated_lambda_route
 
 @lambda_route('/{{lambda_name}}/hello')
 def hello(data, event):
@@ -495,7 +497,7 @@ def hello(data, event):
     return { 'success': True, 'msg': data['msg'] }
 ''')
 
-base_lambda_build = Definition("{{lambda_name}}/build.sh", text='''#!/bin/bash
+base_lambda_build = Definition("src/{{lambda_name}}/build.sh", text='''#!/bin/bash
 python3 -m venv my_venv
 source my_venv/bin/activate
 pip install --upgrade --ignore-installed -r requirements.txt
@@ -512,10 +514,10 @@ rm -rf my_venv/lib/*/site-packages/*.dist-info \\
 cp -rf my_venv/lib/*/site-packages/* modules
 rm -rf my_venv/
 
-zip -r ../build/{{lambda_name}}.zip . -x build.sh -x "*__pycache__*"
+zip -r ../../build/{{lambda_name}}.zip . -x build.sh -x "*__pycache__*"
 ''')
 
-base_lambda_requirements = Definition("{{lambda_name}}/requirements.txt", text='''
+base_lambda_requirements = Definition("src/{{lambda_name}}/requirements.txt", text='''
 pyjwt
 botocore
 ''')
@@ -697,7 +699,7 @@ echo "invoking api: $INVOKE_URL"
 curl -X POST "$INVOKE_URL" -H 'content-type: application/json' -d '{"action":"/{{lambda_name}}/hello","msg":"working as intended"}'
 ''')
 
-graphql_lambda_main = Definition("{{lambda_name}}/main.py", text='''import sys
+graphql_lambda_main = Definition("src/{{lambda_name}}/main.py", text='''import sys
 sys.path.append('modules')
 import os
 import json
@@ -747,7 +749,7 @@ def send_metric(name):
     }])
 ''')
 
-graphql_lambda_authorization = Definition("{{lambda_name}}/authorization.py", text='''import sys
+graphql_lambda_authorization = Definition("src/{{lambda_name}}/authorization.py", text='''import sys
 sys.path.append('modules')
 import os
 import json
@@ -826,7 +828,7 @@ def authorized(authorized_role):
   return inner_authorized
 ''')
 
-graphql_lambda_schema = Definition("{{lambda_name}}/schema.py", text='''import sys
+graphql_lambda_schema = Definition("src/{{lambda_name}}/schema.py", text='''import sys
 sys.path.append('modules')
 
 from graphene import ObjectType, String, Schema
@@ -848,7 +850,7 @@ class Query(ObjectType):
 schema = Schema(query=Query)
 ''')
 
-graphql_lambda_requirements = Definition("{{lambda_name}}/requirements.txt", text='''graphene
+graphql_lambda_requirements = Definition("src/{{lambda_name}}/requirements.txt", text='''graphene
 pyjwt
 ''')
 graphql_lambda_test = Definition("scripts/test.sh", append=True, text='''
@@ -857,7 +859,7 @@ echo "invoking api: $INVOKE_URL"
 curl -X POST "$INVOKE_URL" -H 'content-type: application/json' -d '{"query":"{ hello login(email:\"asdf\", password:\"asdf\") }"}'
 ''')
 
-usermanager_lambda_schema = Definition("{{lambda_name}}/schema.py", append=True, text='''import sys
+usermanager_lambda_schema = Definition("src/{{lambda_name}}/schema.py", append=True, text='''import sys
 sys.path.append('modules')
 
 import uuid
@@ -980,7 +982,7 @@ class Mutation(ObjectType):
 
 schema = Schema(query=Query, mutation=Mutation)
 ''')
-usermanager_lambda_models = Definition("{{lambda_name}}/models.py", append=True, ignore_missing=True, text='''import os
+usermanager_lambda_models = Definition("src/{{lambda_name}}/models.py", append=True, ignore_missing=True, text='''import os
 from pynamodb.models import Model
 from pynamodb.indexes import GlobalSecondaryIndex, KeysOnlyProjection
 from pynamodb.attributes import UnicodeAttribute, UTCDateTimeAttribute
@@ -1004,7 +1006,7 @@ class UserModel(Model):
   created_at = UTCDateTimeAttribute()
   last_login_at = UTCDateTimeAttribute(null=True)
 ''')
-usermanager_lambda_requirements = Definition("{{lambda_name}}/requirements.txt", append_if_not_exist=True, text='''graphene
+usermanager_lambda_requirements = Definition("src/{{lambda_name}}/requirements.txt", append_if_not_exist=True, text='''graphene
 pynamodb
 ''')
 usermanager_lambda_test = Definition("scripts/test.sh", append=True, text='''
@@ -1015,7 +1017,7 @@ curl -X POST "$INVOKE_URL" -H 'content-type: application/json' -H "authorization
 # token="YOUR_TOKEN_HERE"
 # curl -X POST "$INVOKE_URL" -H 'content-type: application/json' -H "authorization: $token" -d '{"query":"{ verify }"}'
 ''')
-usermanager_lambda_unit_test = Definition("{{lambda_name}}/test.py", append=True, ignore_missing=True, text='''#!/usr/bin/env python3
+usermanager_lambda_unit_test = Definition("src/{{lambda_name}}/test.py", append=True, ignore_missing=True, text='''#!/usr/bin/env python3
 import sys
 sys.path.append('modules')
 import os
@@ -1073,7 +1075,7 @@ print("new reset token:", user.reset_token)
 ''')
 
 
-crud_lambda_authorization = Definition("{{lambda_name}}/authorization.py", append_if_not_exist=True, ignore_missing=True, text='''
+crud_lambda_authorization = Definition("src/{{lambda_name}}/authorization.py", append_if_not_exist=True, ignore_missing=True, text='''
 def get_model_by_class(object_model, id, owner_id):
   print('[i] getting ', object_model ,':', id, 'for', owner_id)
   try:
@@ -1128,7 +1130,7 @@ def with_singleton_model(object_model):
   return inner_with_object
 ''')
 
-crud_lambda_models = Definition("{{lambda_name}}/models.py", append=True, ignore_missing=True, text='''import os
+crud_lambda_models = Definition("src/{{lambda_name}}/models.py", append=True, ignore_missing=True, text='''import os
 from pynamodb.models import Model
 from pynamodb.indexes import GlobalSecondaryIndex, KeysOnlyProjection
 from pynamodb.attributes import UnicodeAttribute, UTCDateTimeAttribute
@@ -1147,7 +1149,7 @@ class {{table_name}}Model(Model):
   content = UnicodeAttribute()
 ''')
 
-crud_lambda_schema = Definition("{{lambda_name}}/schema.py", append=True, text='''import sys
+crud_lambda_schema = Definition("src/{{lambda_name}}/schema.py", append=True, text='''import sys
 sys.path.append('modules')
 import uuid
 import datetime
@@ -1212,7 +1214,7 @@ curl -X POST "$INVOKE_URL" -H 'content-type: application/json' -H "authorization
 curl -X POST "$INVOKE_URL" -H 'content-type: application/json' -H "authorization: $token" -d '{"query":"{ updateUserDashboard(id:\"13254f58-fa90-406b-bbf9-e1b6291efee1\", content:\"zxcvzxcv\") }"}'
 curl -X POST "$INVOKE_URL" -H 'content-type: application/json' -H "authorization: $token" -d '{"query":"{ deleteUserDashboard(id:\"13254f58-fa90-406b-bbf9-e1b6291efee1\") }"}'
 ''')
-crud_lambda_unit_test = Definition("{{lambda_name}}/test.py", append=True, ignore_missing=True, text='''#!/usr/bin/env python3
+crud_lambda_unit_test = Definition("src/{{lambda_name}}/test.py", append=True, ignore_missing=True, text='''#!/usr/bin/env python3
 import sys
 sys.path.append('modules')
 import os
@@ -1255,7 +1257,7 @@ res = schema.execute('mutation { delete{{table_name}}(id:"'+{{table_name}}_id+'"
 print(res)
 ''')
 
-singleton_crud_lambda_schema = Definition("{{lambda_name}}/schema.py", append=True, text='''import sys
+singleton_crud_lambda_schema = Definition("src/{{lambda_name}}/schema.py", append=True, text='''import sys
 sys.path.append('modules')
 import uuid
 import datetime
@@ -1295,7 +1297,7 @@ class Mutation(ObjectType):
     {{table_name}}.save()
     return 'ok'
 ''')
-singleton_crud_lambda_unit_test = Definition("{{lambda_name}}/test.py", append=True, ignore_missing=True, text='''#!/usr/bin/env python3
+singleton_crud_lambda_unit_test = Definition("src/{{lambda_name}}/test.py", append=True, ignore_missing=True, text='''#!/usr/bin/env python3
 import sys
 sys.path.append('modules')
 import os
@@ -1335,7 +1337,7 @@ print(res)
 
 
 website_s3_module = Definition("infrastructure/main.tf", append=True, text='''
-variable "{{website_name}}_build_path" { default = "../{{website_name}}/dist" }
+variable "{{website_name}}_build_path" { default = "../src/{{website_name}}/dist" }
 
 module "{{website_name}}" {
   source = "./{{website_name}}"
@@ -1476,7 +1478,7 @@ output "website_endpoint" { value = "${aws_s3_bucket_website_configuration.bucke
 
 # output "distribution_id" { value = "${aws_cloudfront_distribution.s3_distribution.id}" }
 ''')
-website_s3_dockerfile = Definition("{{website_name}}/docker/Dockerfile", text='''#!/usr/bin/env -S bash -c "docker run -v \${PWD}:/app -p3000:3000 --rm -it \$(docker build -q docker) \$@"
+website_s3_dockerfile = Definition("src/{{website_name}}/docker/Dockerfile", text='''#!/usr/bin/env -S bash -c "docker run -v \${PWD}:/app -p3000:3000 --rm -it \$(docker build -q docker) \$@"
 FROM ubuntu:20.04
 WORKDIR /app
 
@@ -1501,7 +1503,7 @@ USER runuser
 
 CMD npm start
 ''')
-website_s3_package_json = Definition("{{website_name}}/package.json", text='''{
+website_s3_package_json = Definition("src/{{website_name}}/package.json", text='''{
   "name": "react-site",
   "version": "1.0.0",
   "description": "",
@@ -1532,7 +1534,7 @@ website_s3_package_json = Definition("{{website_name}}/package.json", text='''{
     "react-router-dom": "^6.4.4"
   }
 }''')
-website_s3_webpack_config = Definition("{{website_name}}/webpack.config.js", text='''const path = require("path");
+website_s3_webpack_config = Definition("src/{{website_name}}/webpack.config.js", text='''const path = require("path");
 const HtmlWebpackPlugin = require("html-webpack-plugin");
 
 /*We are basically telling webpack to take index.js from entry. Then check for all file extensions in resolve. 
@@ -1613,23 +1615,16 @@ module.exports={
     ]
   }
 }''')
-website_s3_babelrc = Definition("{{website_name}}/.babelrc", text='''{
-  /*
-    a preset is a set of plugins used to support particular language features.
-    The two presets Babel uses by default: es2015, react
-  */
+website_s3_babelrc = Definition("src/{{website_name}}/babel.config.js", text='''module.exports = {
   "presets": [
-    "@babel/preset-env", //compiling ES2015+ syntax
-    "@babel/preset-react" //for react
+    "@babel/preset-env",
+    "@babel/preset-react"
   ],
-  /*
-    Babel's code transformations are enabled by applying plugins (or presets) to your configuration file.
-  */
   "plugins": [
     "@babel/plugin-transform-runtime"
   ]
 }''')
-website_s3_index_js = Definition("{{website_name}}/index.js", text='''import React from "react";
+website_s3_index_js = Definition("src/{{website_name}}/index.js", text='''import React from "react";
 import reactDom from "react-dom";
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter } from "react-router-dom";
@@ -1640,7 +1635,7 @@ root.render(<BrowserRouter>
     <App />
   </BrowserRouter>);
 ''')
-website_s3_index_html = Definition("{{website_name}}/src/index.html", text='''<html lang="en">
+website_s3_index_html = Definition("src/{{website_name}}/src/index.html", text='''<html lang="en">
   <head>
     <meta charset="UTF-8">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
@@ -1653,7 +1648,7 @@ website_s3_index_html = Definition("{{website_name}}/src/index.html", text='''<h
     <div id="root"></div>
   </body>
 </html>''')
-website_s3_app_js = Definition("{{website_name}}/src/App.js", text='''import React from "react";
+website_s3_app_js = Definition("src/{{website_name}}/src/App.js", text='''import React from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 import Home from "./pages/Home";
 
@@ -1669,7 +1664,7 @@ const App = () => {
 
 export default App
 ''')
-website_s3_home_js = Definition("{{website_name}}/src/pages/Home.jsx", text='''import React from "react";
+website_s3_home_js = Definition("src/{{website_name}}/src/pages/Home.jsx", text='''import React from "react";
 
 const Home = () => {
   return (
@@ -1680,7 +1675,7 @@ const Home = () => {
 }
 export default Home
 ''')
-website_s3_styles_css = Definition("{{website_name}}/public/css/styles.css", text='''''')
+website_s3_styles_css = Definition("src/{{website_name}}/public/css/styles.css", text='''''')
 website_s3_test = Definition("scripts/test.sh", append=True, text='''
 WEBSITE_URL=$(cat infrastructure/terraform.tfstate | jq -r '.outputs.{{website_name}}_endpoint.value')
 echo "website endpoint: $WEBSITE_URL"
@@ -1852,7 +1847,7 @@ resource "aws_s3_object" "build_file" {
 output "server_ip" { value = "${aws_instance.instance.public_ip}" }
 output "instance_id" { value = "${aws_instance.instance.id}" }
 ''')
-ec2_server_install_sh = Definition("{{server_name}}/install.sh", text='''#!/bin/sh
+ec2_server_install_sh = Definition("src/{{server_name}}/install.sh", text='''#!/bin/sh
 echo "[+] chmoding everything"
 cd /app/package
 chmod +x ./*.sh
@@ -2157,34 +2152,34 @@ terraform {
 }
 ''')
 
-githubactions_deploy_workflow = Definition(".github/workflows/deploy.yml", text='''
-name: Infra Deploy
+githubactions_deploy_workflow = Definition(".github/workflows/deploy.yml", text='''name: Infra Deploy
+
 on:
   push:
-  branches:
-    - deploy
+    branches:
+      - deploy
 
 jobs:
   deploy_infra:
-  runs-on: ubuntu-22.04
-  permissions:
-    id-token: write # required to use OIDC authentication
-    contents: read
-  steps:
-    - uses: actions/checkout@v3
-    - uses: aws-actions/configure-aws-credentials@v1
-    name: configure aws credentials
-    with:
-      role-to-assume: {{role_arn}}
-      role-duration-seconds: 900
-      aws-region: us-east-1
-    - name: build
-    run: |
-      touch .env
-      make build
-    - name: deploy
-    run: |
-      ./scripts/deploy.sh -autodeploy
+    runs-on: ubuntu-22.04
+    permissions:
+      id-token: write # required to use OIDC authentication
+      contents: read
+    steps:
+      - uses: actions/checkout@v3
+      - uses: aws-actions/configure-aws-credentials@v1
+        name: configure aws credentials
+        with:
+          role-to-assume: {{role_arn}}
+          role-duration-seconds: 900
+          aws-region: us-east-1
+      - name: build
+        run: |
+          touch .env
+          make build
+      - name: deploy
+        run: |
+          ./scripts/deploy.sh -autodeploy
 
 ''')
 
@@ -2263,7 +2258,7 @@ website_s3_bucket_template = TemplateDefinitions('{website_name} bucket', {
 ], '''
 website bucket scaffolding established...
 build the website by doing:
-  cd {website_name}
+  cd src/{website_name}
   chmod +x docker/Dockerfile
   ./docker/Dockerfile npm i -dev
   ./docker/Dockerfile npm run build
@@ -2705,7 +2700,7 @@ try:
   parser.add_argument('--firehose-s3', nargs=1, help='creates a kinesis firehose that puts to an s3 bucket;\t stonemill --firehose-s3 my_firehose_name')
   parser.add_argument('--lambda-schedule-event', nargs=1, help='creates an eventbridge job that triggers lambda on a schedule;\t stonemill --lambda-schedule-event my_lambda')
   parser.add_argument('--githubactions-deploy', nargs=2, help='creates the deployment workflows for github actions to push the terraform infrastructure;\t stonemill --githubactions-deploy "arn:aws:iam::123456789012:role/GithubActionsAccessRole" "tfstate-abcdef0123456789"\n\t follow this guide for how to create your role and secure it to only allow github access: https://benoitboure.com/securely-access-your-aws-resources-from-github-actions')
-  parser.add_argument('--ses-domain', nargs=0, help='creates the DKIM records to start the validation process for an SES domain;\t stonemill --ses-domain')
+  parser.add_argument('--ses-domain', action='store_true', help='creates the DKIM records to start the validation process for an SES domain;\t stonemill --ses-domain')
   args = parser.parse_args()
 
   if args.infra_base:
