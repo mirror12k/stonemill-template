@@ -1486,12 +1486,10 @@ ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \\
   && apt-get install -y curl nano jq zip
 
-RUN curl -sL https://deb.nodesource.com/setup_14.x | bash -
+RUN curl -sL https://deb.nodesource.com/setup_18.x | bash -
 
-# install postgresql
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \\
-  && apt-get install -y awscli \\
   && apt-get install -y openssh-client \\
   && apt-get install -y nodejs \\
   && apt autoclean \\
@@ -1502,6 +1500,17 @@ RUN useradd -ms /bin/bash runuser
 USER runuser
 
 CMD npm start
+''')
+website_s3_build = Definition("src/{{website_name}}/build.sh", text='''#!/bin/bash
+set -e
+
+npm i
+npm run build
+''')
+website_s3_makefile = Definition("./Makefile", append=True, text='''
+build_{{website_name}}:
+\t-mkdir build
+\tcd src/{{website_name}} && bash ./build.sh
 ''')
 website_s3_package_json = Definition("src/{{website_name}}/package.json", text='''{
   "name": "react-site",
@@ -2246,6 +2255,8 @@ website_s3_bucket_template = TemplateDefinitions('{website_name} bucket', {
   website_s3_module,
   website_s3_definition,
   website_s3_dockerfile,
+  website_s3_build,
+  website_s3_makefile,
   website_s3_package_json,
   website_s3_webpack_config,
   website_s3_babelrc,
