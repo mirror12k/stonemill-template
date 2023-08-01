@@ -1,0 +1,154 @@
+#!/usr/bin/env python3
+import os
+import sys
+import re
+
+
+
+def get_object_by_name(name):
+	return next( v for v in s['__schema']['types'] if v['name'] == name )
+def stringify_object_by_name(name):
+	print(name)
+	obj = get_object_by_name(name)
+	print(obj)
+
+	return '{ ' + ' '.join([ stringify_object(f) for f in obj['fields'] ]) + ' }'
+def stringify_field(field):
+	# print(field)
+	if field['type']['kind'] == 'SCALAR':
+		return field['name']
+	elif field['type']['kind'] == 'LIST':
+		return field['name']
+	elif field['type']['kind'] == 'OBJECT':
+		return field['name'] + ' ' + stringify_object(get_object_by_name(field['type']['name']))
+	else:
+		return "UNKNOWN"
+def stringify_object(obj):
+	# print(obj)
+	if obj['kind'] == 'SCALAR':
+		return obj['name']
+	elif obj['kind'] == 'OBJECT':
+		return '{ ' + ' '.join([ stringify_field(f) for f in obj['fields'] ]) + ' }'
+	else:
+		return "UNKNOWN"
+def stringify_call(field):
+	# print(field['args'])
+	if len(field['args']) > 0:
+		if field['type']['kind'] == 'SCALAR':
+			return field['name'] + '(' + ', '.join([ stringify_query_arg(a) for a in field['args'] ]) + ') ' + '{ ' + field['name'] + '(' + ', '.join([ stringify_arg(a) for a in field['args'] ]) + ')' + ' }'
+		elif field['type']['kind'] == 'LIST':
+			return field['name'] + '(' + ', '.join([ stringify_query_arg(a) for a in field['args'] ]) + ') ' + '{ ' + field['name'] + '(' + ', '.join([ stringify_arg(a) for a in field['args'] ]) + ')' + ' }'
+		elif field['type']['kind'] == 'OBJECT':
+			return field['name'] + '(' + ', '.join([ stringify_query_arg(a) for a in field['args'] ]) + ') ' + '{ ' + field['name'] + '(' + ', '.join([ stringify_arg(a) for a in field['args'] ]) + ')' + ' ' + stringify_object(get_object_by_name(field['type']['name'])) + ' }'
+		else:
+			return "UNKNOWN"
+	else:
+		if field['type']['kind'] == 'SCALAR':
+			return '{ ' + field['name'] + ' }'
+		elif field['type']['kind'] == 'LIST':
+			return '{ ' + field['name'] + ' }'
+		elif field['type']['kind'] == 'OBJECT':
+			return '{ ' + field['name'] + ' ' + stringify_object(get_object_by_name(field['type']['name'])) + ' }'
+		else:
+			return "UNKNOWN"
+def stringify_arg(arg):
+	return arg['name'] + ':$' + arg['name']
+def stringify_query_arg(arg):
+	return '$' + arg['name'] + ': String!'
+def stringify_vars_array(field):
+	return '{ ' + ', '.join([ a['name'] for a in field['args'] ]) + ' }'
+def argurize_vars_array(field):
+	if len(field['args']) > 0:
+		return '{ ' + ', '.join([ a['name'] for a in field['args'] ]) + ' }'
+	else:
+		return ''
+def to_snake_case(name):
+	name = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', name)
+	return name.lower()
+
+def stringify_full_api_call(field_type, field):
+	if len(field['args']) > 0:
+		return "(" + argurize_vars_array(field) + ") => api_call({ query: '" + field_type + ' ' + stringify_call(field) + "', variables: " + stringify_vars_array(field) + " })"
+	else:
+		return "(" + argurize_vars_array(field) + ") => api_call({ query: '" + field_type + ' ' + stringify_call(field) + "' })"
+
+def compile_schema_based_api(schema):
+	query = get_object_by_name('Query')
+	mutation = get_object_by_name('Mutation')
+
+	print('''
+	export const api_call = data => {
+		console.log('[api] <= ', data.variables, data.query);
+		const headers = { 'content-type': 'application/json' };
+		if (localStorage.getItem('auth_token'))
+			headers['authorization'] = localStorage.getItem('auth_token');
+		return fetch(process.env.API_ENDPOINT, {
+			method: 'POST',
+			headers: headers,
+			body: JSON.stringify(data),
+		}).then(r => r.json()).then(j => {
+			console.log('[api] => ', j);
+			return j;
+		});
+	};
+
+	export default {''')
+	print('\t// queries')
+	for field in query['fields']:
+		print('\t' + to_snake_case(field['name']) + "_api: " + stringify_full_api_call('query', field) + "," )
+	print('\t// mutations')
+	for field in mutation['fields']:
+		print('\t' + to_snake_case(field['name']) + "_api: " + stringify_full_api_call('mutation', field) + "," )
+	print('''\t// utils
+		get_auth_token: () => localStorage.getItem('auth_token'),
+		set_auth_token: token => localStorage.setItem('auth_token', token),
+		clear_auth_token: token => localStorage.setItem('auth_token', ''),
+	}
+	''')
+def compile_route_based_api(routes):
+	# print(routes)
+
+	print('''
+export const api_call = data => {
+	return fetch(process.env.API_ENDPOINT, {
+		method: 'POST',
+		headers: { 'content-type': 'application/json' },
+		body: JSON.stringify(data),
+	}).then(r => r.json());
+};
+
+''')
+	print('// actions')
+	for route in routes:
+		route_function_args = ''
+		route_action_args = ''
+		if route in lambda_routing.all_lambda_route_arguments:
+			route_function_args = '{ ' + ', '.join(lambda_routing.all_lambda_route_arguments[route]) + ' }'
+			route_action_args = ', ' + ', '.join(lambda_routing.all_lambda_route_arguments[route])
+		print("export const {}_api = ({}) => api_call({{ 'action': '{}'{} }});".format(route.split('/')[2], route_function_args, route, route_action_args))
+
+	print('''// utils
+export const get_auth_token = () => localStorage.getItem('auth_token');
+export const set_auth_token = token => localStorage.setItem('auth_token', token);
+export const clear_auth_token = token => localStorage.setItem('auth_token', '');
+''')
+
+
+if len(sys.argv) < 2:
+	print('argument required for api provider path')
+	exit()
+else:
+	provider_path = sys.argv[1]
+	sys.path.append(provider_path)
+	sys.path.append(provider_path + '/modules')
+
+
+
+if os.path.exists(provider_path + '/schema.py'):
+	from schema import schema
+	s = schema.introspect()
+	compile_schema_based_api(s)
+else:
+	import routes
+	import lambda_routing
+	compile_route_based_api(lambda_routing.all_lambda_routes)
