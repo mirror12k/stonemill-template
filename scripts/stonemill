@@ -220,6 +220,8 @@ RUN ln -s /app/scripts/stonemill /usr/bin/stonemill
 RUN useradd -ms /bin/bash runuser
 USER runuser
 
+RUN echo ". /app/scripts/weasel_autocomplete" >> ~/.bashrc
+
 CMD make bash
 
 ''')
