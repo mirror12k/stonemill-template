@@ -192,8 +192,7 @@ build:
 
 ''')
 
-base_dockerfile = Definition("./docker/Dockerfile", text='''#!/usr/bin/env -S bash -c "docker run -v \${PWD}:/app --rm --cap-drop=all -it \$(docker build -q docker) \$@"
-FROM ubuntu:22.04
+base_dockerfile = Definition("./docker/Dockerfile", text='''FROM ubuntu:22.04
 
 WORKDIR /app
 
@@ -204,7 +203,7 @@ RUN apt-get update && apt-get install -y gnupg software-properties-common curl \
   && apt-get update \\
   && apt-get install -y nano jq zip make \\
   && apt-get install -y terraform \\
-  && apt-get install -y python3-venv python3-pip \\
+  && apt-get install -y python3-venv \\
   && apt-get install -y openssh-client \\
   && apt autoclean \\
   && apt autoremove \\
@@ -223,7 +222,12 @@ USER runuser
 
 CMD make bash
 
+''')
 
+base_docker_run = Definition("./docker/run", text='''#!/bin/bash
+IMAGE_TAG="local-${PWD##*/}"
+docker image inspect "$IMAGE_TAG" > /dev/null || docker build docker -t "$IMAGE_TAG"
+docker run -v $PWD:/app --rm --cap-drop=all -it $(docker build -q docker -t "$IMAGE_TAG") $@
 ''')
 
 base_gitignore = Definition("./.gitignore", text='''build
@@ -1478,8 +1482,7 @@ output "website_endpoint" { value = "${aws_s3_bucket_website_configuration.bucke
 
 # output "distribution_id" { value = "${aws_cloudfront_distribution.s3_distribution.id}" }
 ''')
-website_s3_dockerfile = Definition("src/{{website_name}}/docker/Dockerfile", text='''#!/usr/bin/env -S bash -c "docker run -v \${PWD}:/app -p3000:3000 --rm -it \$(docker build -q docker) \$@"
-FROM ubuntu:20.04
+website_s3_dockerfile = Definition("src/{{website_name}}/docker/Dockerfile", text='''FROM ubuntu:20.04
 WORKDIR /app
 
 ARG DEBIAN_FRONTEND=noninteractive
@@ -1500,6 +1503,11 @@ RUN useradd -ms /bin/bash runuser
 USER runuser
 
 CMD npm start
+''')
+website_s3_docker_run = Definition("src/{{website_name}}/docker/run", text='''#!/bin/bash
+IMAGE_TAG="local-${PWD##*/}"
+docker image inspect "$IMAGE_TAG" > /dev/null || docker build docker -t "$IMAGE_TAG"
+docker run -v $PWD:/app -p3000:3000 --rm --cap-drop=all -it $(docker build -q docker -t "$IMAGE_TAG") $@
 ''')
 website_s3_build = Definition("src/{{website_name}}/build.sh", text='''#!/bin/bash
 set -e
@@ -2219,14 +2227,15 @@ infra_base_template = TemplateDefinitions('{infra_name} infra', {
   base_terraform_main,
   base_makefile,
   base_dockerfile,
+  base_docker_run,
   base_gitignore,
 ], '''
 base infrastructure established...
 
 to run:
   put your `AWS_ACCESS_ID=` and `AWS_ACCESS_KEY=` into a .env file here
-  do `chmod +x ./docker/Dockerfile`
-  execute with `./docker/Dockerfile`
+  do `chmod +x ./docker/run`
+  execute with `./docker/run`
 
 deploy with `weasel deploy`
 destroy and clean with `weasel destroy clean`
@@ -2255,6 +2264,7 @@ website_s3_bucket_template = TemplateDefinitions('{website_name} bucket', {
   website_s3_module,
   website_s3_definition,
   website_s3_dockerfile,
+  website_s3_docker_run,
   website_s3_build,
   website_s3_makefile,
   website_s3_package_json,
@@ -2270,9 +2280,9 @@ website_s3_bucket_template = TemplateDefinitions('{website_name} bucket', {
 website bucket scaffolding established...
 build the website by doing:
   cd src/{website_name}
-  chmod +x docker/Dockerfile
-  ./docker/Dockerfile npm i -dev
-  ./docker/Dockerfile npm run build
+  chmod +x docker/run
+  ./docker/run npm i -dev
+  ./docker/run npm run build
 then deploy your infra as normal
 ''')
 
@@ -2293,9 +2303,9 @@ tail logs by using `aws logs tail /aws/lambda/MYLAMBDA_NAME --follow --region us
 ''', '''
 
 test your lambda by invoking:
-  aws lambda invoke --region us-east-1 \
-    --function-name <LAMBDA_FULL_NAME> \
-    --payload $(echo '{ "body": "{\"action\":\"/<LAMBDA_NAME>/hello\"}" }' | base64 -w 0) \
+  aws lambda invoke --region us-east-1 \\
+    --function-name <LAMBDA_FULL_NAME> \\
+    --payload $(echo '{ "body": "{\"action\":\"/<LAMBDA_NAME>/hello\"}" }' | base64 -w 0) \\
     /dev/stdout
 
 ''')
@@ -2317,9 +2327,9 @@ tail logs by using `aws logs tail /aws/lambda/MYLAMBDA_NAME --follow --region us
 ''', '''
 
 test your graphql lambda by invoking:
-  aws lambda invoke --region us-east-1 \
-    --function-name <LAMBDA_FULL_NAME> \
-    --payload $(echo '{ "body": "{\"query\":\"{ hello }\"}" }' | base64 -w 0) \
+  aws lambda invoke --region us-east-1 \\
+    --function-name <LAMBDA_FULL_NAME> \\
+    --payload $(echo '{ "body": "{\"query\":\"{ hello }\"}" }' | base64 -w 0) \\
     /dev/stdout
 ''')
 
