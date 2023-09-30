@@ -172,8 +172,8 @@ include .env
 export
 
 configure:
-\t@aws configure set aws_access_key_id ${AWS_ACCESS_ID}
-\t@aws configure set aws_secret_access_key ${AWS_ACCESS_KEY}
+\t@aws configure set aws_access_key_id ${AWS_ACCESS_KEY_ID}
+\t@aws configure set aws_secret_access_key ${AWS_SECRET_ACCESS_KEY}
 \t./scripts/aws-authenticate-mfa.sh
 
 bash: configure
@@ -2235,7 +2235,7 @@ infra_base_template = TemplateDefinitions('{infra_name} infra', {
 base infrastructure established...
 
 to run:
-  put your `AWS_ACCESS_ID=` and `AWS_ACCESS_KEY=` into a .env file here
+  put your `AWS_ACCESS_KEY_ID=` and `AWS_SECRET_ACCESS_KEY=` into a .env file here
   do `chmod +x ./docker/run`
   execute with `./docker/run`
 
