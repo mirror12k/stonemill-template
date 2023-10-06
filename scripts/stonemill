@@ -231,7 +231,10 @@ CMD make bash
 base_docker_run = Definition("./docker/run", text='''#!/bin/bash
 IMAGE_TAG="local-${PWD##*/}"
 docker image inspect "$IMAGE_TAG" > /dev/null || docker build docker -t "$IMAGE_TAG"
-docker run -v $PWD:/app --rm --cap-drop=all -it $(docker build -q docker -t "$IMAGE_TAG") $@
+docker run --rm --cap-drop=all \\
+  -v "$PWD:/app" \\
+  -v "$PWD/docker:/app/docker:ro" \\
+  -it $(docker build -q docker -t "$IMAGE_TAG") $@
 ''')
 
 base_gitignore = Definition("./.gitignore", text='''build
