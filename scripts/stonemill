@@ -2247,7 +2247,7 @@ infra_base_template = TemplateDefinitions('{infra_name} infra', {
 base infrastructure established...
 
 to run:
-  put your `AWS_ACCESS_KEY_ID=` and `AWS_SECRET_ACCESS_KEY=` into a .env file here
+  [optional] put your `AWS_ACCESS_KEY_ID=` and `AWS_SECRET_ACCESS_KEY=` into a .aws.credentials file here
   do `chmod +x ./docker/run`
   execute with `./docker/run`
 
