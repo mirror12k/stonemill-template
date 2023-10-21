@@ -187,6 +187,9 @@ deploy:
 destroy:
 \t./scripts/deploy.sh -destroy
 
+output:
+\tterraform -chdir=infrastructure output && read _
+
 clean:
 \trm -rf build .keys infrastructure/.terraform infrastructure/terraform.tfstate* src/*/modules src/*/node_modules src/*/dist
 
@@ -261,6 +264,7 @@ module "{{lambda_name}}" {
 ''')
 
 base_lambda_makefile = Definition("./Makefile", append=True, text='''
+build: build_{{lambda_name}}
 build_{{lambda_name}}:
 \t-mkdir build
 \tcd src/{{lambda_name}} && bash ./build.sh
@@ -1523,6 +1527,7 @@ npm i
 npm run build
 ''')
 website_s3_makefile = Definition("./Makefile", append=True, text='''
+build: build_{{website_name}}
 build_{{website_name}}:
 \t-mkdir build
 \tcd src/{{website_name}} && bash ./build.sh
@@ -1726,6 +1731,7 @@ output "{{server_name}}_server_ip" { value = module.{{server_name}}.server_ip }
 output "{{server_name}}_instance_id" { value = module.{{server_name}}.instance_id }
 ''')
 ec2_server_makefile = Definition("./Makefile", append=True, text='''
+build: build_{{server_name}}_package
 build_{{server_name}}_package:
 \t-mkdir build
 \tzip build/{{server_name}}.zip -FSr {{server_name}}/
