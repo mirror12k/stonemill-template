@@ -477,33 +477,56 @@ def route_request(event):
 ''')
 
 base_lambda_lib = Definition("src/{{lambda_name}}/lambda_routing.py", text='''all_lambda_routes = {}
+all_lambda_functions = {}
+all_lambda_route_arguments = {}
+all_lambda_route_arguments_by_wrapper = {}
 def lambda_route(route):
   def lambda_route_lambda_route(f):
     def wrapper(*args, **kwargs):
       return f(*args, **kwargs)
     all_lambda_routes[route] = wrapper
+    all_lambda_functions[wrapper] = route
+    if f in all_lambda_route_arguments_by_wrapper:
+      all_lambda_route_arguments[route] = all_lambda_route_arguments_by_wrapper[f]
     return wrapper
   return lambda_route_lambda_route
 
 def authenticated_lambda_route(route, authentication_fun):
-  def lambda_route_lambda_route(f):
+  def lambda_route_authenticated_lambda_route(f):
     def wrapper(data, *args, **kwargs):
       account = authentication_fun(data)
       if account is None:
+        print('[-] authentication failed')
         return { 'success': False, 'error': 'unauthenticated' }
       else:
         return f(data, account, *args, **kwargs)
     all_lambda_routes[route] = wrapper
+    all_lambda_functions[wrapper] = route
+    if f in all_lambda_route_arguments_by_wrapper:
+      all_lambda_route_arguments[route] = all_lambda_route_arguments_by_wrapper[f]
     return wrapper
-  return lambda_route_lambda_route
+  return lambda_route_authenticated_lambda_route
+
+def with_arguments(*required_data_args):
+  def lambda_route_with_arguments(f):
+    def wrapper(data, *args, **kwargs):
+      for required_arg in required_data_args:
+        if required_arg not in data:
+          print('[-] argument missing:', required_arg)
+          return { 'success': False, 'error': 'missing argument' }
+      return f(data, *args, **kwargs)
+    all_lambda_route_arguments_by_wrapper[wrapper] = required_data_args
+    return wrapper
+  return lambda_route_with_arguments
 
 def get_route(route):
   return all_lambda_routes.get(route)
 ''')
 
-base_lambda_routes = Definition("src/{{lambda_name}}/routes.py", text='''from lambda_routing import lambda_route, authenticated_lambda_route
+base_lambda_routes = Definition("src/{{lambda_name}}/routes.py", text='''from lambda_routing import *
 
 @lambda_route('/{{lambda_name}}/hello')
+@with_arguments('msg')
 def hello(data, event):
   if data.get('msg') is None:
     print('[-] missing message')
