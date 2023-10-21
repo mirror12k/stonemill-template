@@ -39,6 +39,9 @@ def strip_comments(lines):
 	return [ s[:s.index('#')] if '#' in s else s for s in lines ]
 
 def concatenate_follow_lines(lines):
+	if len(lines) == 0:
+		return []
+
 	ls = [ lines[0] ]
 	for l in lines[1:]:
 		if ls[-1].endswith('\\\n'):
