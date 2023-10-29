@@ -133,6 +133,8 @@ locals {
   metrics_path = "${var.company_name}/${local.infragroup_fullname}"
   infragroup_fullname = "${var.group_name}-${var.stage}"
   domain_name = (var.stage == "prod" ? var.root_domain : "${var.stage}.${var.root_domain}")
+  alarm_emails = []
+  # alarm_emails = ["example@example.org"]
 }
 
 output "domain_name" { value = local.domain_name }
@@ -164,6 +166,17 @@ resource "aws_cloudwatch_dashboard" "service_monitoring_dashboard" {
   "widgets": []
 }
 EOF
+}
+
+# sns alarm topics for configuring metric alarms
+resource "aws_sns_topic" "alarm_topic" {
+  name = "${local.infragroup_fullname}-alarm_topic"
+}
+resource "aws_sns_topic_subscription" "alarm_email_target" {
+  count     = length(local.alarm_emails)
+  topic_arn = aws_sns_topic.alarm_topic.arn
+  protocol  = "email"
+  endpoint  = local.alarm_emails[count.index]
 }
 ''')
 
@@ -257,6 +270,7 @@ module "{{lambda_name}}" {
 
   metrics_path = local.metrics_path
   infragroup_fullname = local.infragroup_fullname
+  sns_alarm_topic_arn = aws_sns_topic.alarm_topic.arn
   lambda_build_path = var.{{lambda_name}}_build_path
 }
 ''')
@@ -271,6 +285,7 @@ build_{{lambda_name}}:
 base_lambda_definition = Definition("infrastructure/{{lambda_name}}/{{lambda_name}}.tf", text='''
 variable "metrics_path" { type = string }
 variable "infragroup_fullname" { type = string }
+variable "sns_alarm_topic_arn" { type = string }
 variable "lambda_build_path" { type = string }
 
 locals {
@@ -1743,6 +1758,7 @@ module "{{server_name}}" {
 
   metrics_path = local.metrics_path
   infragroup_fullname = local.infragroup_fullname
+  sns_alarm_topic_arn = aws_sns_topic.alarm_topic.arn
   package_build_path = var.{{server_name}}_build_path
   ssh_keypath = var.{{server_name}}_ssh_keypath
   server_config = {}
@@ -1760,6 +1776,7 @@ build_{{server_name}}_package:
 ''')
 ec2_server_definition = Definition("infrastructure/{{server_name}}/{{server_name}}.tf", text='''
 variable "infragroup_fullname" { type = string }
+variable "sns_alarm_topic_arn" { type = string }
 variable "metrics_path" { type = string }
 
 variable "package_build_path" { type = string }
@@ -1916,11 +1933,13 @@ module "database_tables" {
   source = "./database_tables"
 
   infragroup_fullname = local.infragroup_fullname
+  sns_alarm_topic_arn = aws_sns_topic.alarm_topic.arn
 }
 ''')
 
 dynamodb_tables_header_definition = Definition("infrastructure/database_tables/database_tables.tf", append_if_not_exist=True, text='''
 variable "infragroup_fullname" { type = string }
+variable "sns_alarm_topic_arn" { type = string }
 
 locals {
   fullname = "${var.infragroup_fullname}"
@@ -2048,6 +2067,7 @@ firehose_s3_module = Definition("infrastructure/main.tf", append=True, text='''
 module "{{firehose_name}}" {
   source = "./{{firehose_name}}"
   infragroup_fullname = local.infragroup_fullname
+  sns_alarm_topic_arn = aws_sns_topic.alarm_topic.arn
 }
 output "{{firehose_name}}_stream_name" { value = module.{{firehose_name}}.firehose_stream_name }
 output "{{firehose_name}}_bucket_id" { value = module.{{firehose_name}}.bucket_id }
@@ -2056,6 +2076,7 @@ output "{{firehose_name}}_bucket_id" { value = module.{{firehose_name}}.bucket_i
 
 firehose_s3_definition = Definition("infrastructure/{{firehose_name}}/{{firehose_name}}.tf", text='''
 variable "infragroup_fullname" { type = string }
+variable "sns_alarm_topic_arn" { type = string }
 
 locals {
   fullname = "${var.infragroup_fullname}-{{firehose_name}}"
