@@ -1822,7 +1822,7 @@ resource "aws_instance" "instance" {
 }
 
 resource "aws_key_pair" "instance_aws_key" {
-  key_name_prefix = "${local.fullname}-aws_key-"
+  key_name_prefix = "${local.fullname}-aws_key"
   public_key = file("${var.ssh_keypath}.pub")
 }
 
@@ -1983,6 +1983,192 @@ log_group_name = /{metrics_group}/server-logs
 log_stream_name = {instance_id}/init.log
 initial_position = start_of_file
 buffer_duration = 300000
+''')
+
+
+
+windows_ec2_server_definition = Definition("infrastructure/{{server_name}}/{{server_name}}.tf", text='''
+variable "infragroup_fullname" { type = string }
+variable "sns_alarm_topic_arn" { type = string }
+variable "metrics_path" { type = string }
+
+variable "package_build_path" { type = string }
+variable "ssh_keypath" { type = string }
+variable "ingress_ports" { default = [22, 3389] }
+variable "server_config" { default = {} }
+
+locals {
+  fullname = "${var.infragroup_fullname}-{{server_name}}"
+  metrics_group = "${var.metrics_path}/{{server_name}}"
+}
+
+data "aws_ami" "windows_ami_image" {
+  most_recent = true
+  filter {
+    name   = "name"
+    values = ["Windows_Server-2019-English-Full-Base-*"]
+  }
+  filter {
+    name   = "virtualization-type"
+    values = ["hvm"]
+  }
+  owners = ["801119661308"]
+}
+
+
+resource "aws_instance" "instance" {
+  ami           = data.aws_ami.windows_ami_image.id
+  instance_type = "t2.medium"
+
+  security_groups = [aws_security_group.instance_security_group.name]
+  key_name = aws_key_pair.instance_aws_key.id
+  iam_instance_profile = aws_iam_instance_profile.instance_profile.id
+
+  root_block_device {
+    volume_size = 60
+  }
+
+  # user_data = <<-EOT
+  # #cloud-config
+  # runcmd:
+  #   - sleep 5
+  #   - sudo env DEBIAN_FRONTEND=noninteractive apt -y update
+  #   - sudo env DEBIAN_FRONTEND=noninteractive apt install -y unzip curl awscli jq
+  #   - sudo mkdir -p /app/log
+  #   - sudo mkdir -p /app/config
+  #   - sudo chown -R ubuntu:ubuntu /app
+  #   - echo '${local.fullname}' > /app/config/server_fullname
+  #   - echo '${local.metrics_group}' > /app/config/metrics_group
+  #   - echo '${jsonencode(var.server_config)}' > /app/config/server_config.json
+  #   - echo 's3://${aws_s3_bucket.deploy_bucket.id}/'
+  #   - aws s3 cp s3://${aws_s3_bucket.deploy_bucket.id}/package.zip /app/package.zip
+  #   - unzip /app/package.zip -d /app
+  #   - sudo chown -R ubuntu:ubuntu /app
+  #   - cd /app/{{server_name}} && chmod +x *.sh && ./install.sh 2>&1 >> /app/log/init.log
+  # EOT
+}
+
+resource "aws_key_pair" "instance_aws_key" {
+  key_name_prefix = "${local.fullname}-aws_key"
+  public_key = file("${var.ssh_keypath}.pub")
+}
+
+resource "aws_security_group" "instance_security_group" {
+  name        = "${local.fullname}-security_group"
+  description = "Allow ssh and standard http/https ports inbound and everything outbound"
+
+  dynamic "ingress" {
+    for_each = var.ingress_ports
+    iterator = port
+    content {
+      from_port   = port.value
+      to_port     = port.value
+      protocol    = "TCP"
+      cidr_blocks = ["0.0.0.0/0"]
+    }
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+resource "aws_iam_instance_profile" "instance_profile" {
+  name = "${local.fullname}-instance_profile"
+  role = aws_iam_role.instance_role.name
+}
+
+resource "aws_iam_role" "instance_role" {
+  name = "${local.fullname}-instance_role"
+  path = "/"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action = "sts:AssumeRole"
+      Effect = "Allow"
+      Principal = {
+        Service = "ec2.amazonaws.com"
+      }
+    }]
+  })
+}
+
+resource "aws_iam_policy" "instance_policy" {
+  name = "${local.fullname}-instance_policy"
+
+  policy = <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:Get*",
+        "s3:List*"
+      ],
+      "Resource": [
+        "arn:aws:s3:::${aws_s3_bucket.deploy_bucket.id}",
+        "arn:aws:s3:::${aws_s3_bucket.deploy_bucket.id}/*"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+      ],
+      "Resource": [
+        "*"
+      ]
+    }
+  ]
+}
+EOF
+}
+
+resource "aws_iam_policy_attachment" "instance_policy_attachment" {
+  name       = "${local.fullname}-instance_policy_attachment"
+  roles      = [aws_iam_role.instance_role.name]
+  policy_arn = aws_iam_policy.instance_policy.arn
+}
+
+
+resource "random_id" "deploy_bucket_random_id" { byte_length = 24 }
+resource "aws_s3_bucket" "deploy_bucket" {
+  bucket = "deploypackage-${random_id.deploy_bucket_random_id.hex}"
+  force_destroy = true
+}
+
+resource "aws_s3_object" "build_file" {
+  bucket = aws_s3_bucket.deploy_bucket.id
+  key = "package.zip"
+  source = var.package_build_path
+  etag = filemd5(var.package_build_path)
+}
+
+# # CPU Utilization alarm, will sound when utilization is over 80 percent for two periods
+# resource "aws_cloudwatch_metric_alarm" "cpu_utilization_alarm" {
+#   alarm_name                = "${local.fullname}-cpu_utilization_alarm"
+#   comparison_operator       = "GreaterThanOrEqualToThreshold"
+#   evaluation_periods        = "2"
+#   metric_name               = "CPUUtilization"
+#   namespace                 = "AWS/EC2"
+#   period                    = "120" # seconds
+#   statistic                 = "Average"
+#   threshold                 = "80"
+#   alarm_description         = "This metric monitors ec2 cpu utilization"
+#   alarm_actions = [var.sns_alarm_topic_arn]
+#   dimensions = {
+#     InstanceId = aws_instance.example.id
+#   }
+# }
+
+output "server_ip" { value = "${aws_instance.instance.public_ip}" }
+output "instance_id" { value = "${aws_instance.instance.id}" }
 ''')
 
 
@@ -2373,6 +2559,30 @@ ec2 server scaffolding established...
 build with `weasel build_{server_name}_package`
 your private ssh key will be located at `.keys/{server_name}_key` after the build
 ssh into the server with `./scripts/ssh-into.sh {server_name}` after it is deployed
+''')
+
+
+windows_ec2_server_template = TemplateDefinitions('{server_name} windows server', {
+  'server_name': r"^[a-zA-Z_][a-zA-Z0-9_]+$",
+}, [
+  ec2_server_module,
+  ec2_server_makefile,
+  windows_ec2_server_definition,
+  ec2_server_install_sh,
+  ec2_server_startup_sh,
+  ec2_server_reboot_sh,
+  ec2_server_awslogs_cfg,
+], '''
+windows ec2 server scaffolding established...
+build with `weasel build_{server_name}_package`.
+make sure you have an rdp client installed to log into the server.
+download the rdp file from aws console.
+run the following command to get your login password:
+`aws ec2 get-password-data --instance-id "<instance-id>" --priv-launch-key .keys/{server_name}_key --region us-east-1`
+rdp into the server to access it.
+
+helpful one-liner to install chrome from powershell:
+`$Path = $env:TEMP; $Installer = 'chrome_installer.exe'; Invoke-WebRequest -Uri 'http://dl.google.com/chrome/install/375.126/chrome_installer.exe' -OutFile $Path\$Installer; Start-Process -FilePath $Path\$Installer -Args '/silent /install' -Verb RunAs -Wait; Remove-Item -Path $Path\$Installer`
 ''')
 
 
@@ -2832,6 +3042,7 @@ try:
   parser.add_argument('--api-gql-lambda-function', nargs=1, help='creates a py3 graphql lambda with an api gateway;\t stonemill --api-gql-lambda-function my_lambda')
   parser.add_argument('--website-s3-bucket', nargs=2, help='creates an s3 bucket for hosting a react site;\t stonemill --website-s3-bucket my_website myspecialfrontend.com')
   parser.add_argument('--ec2-server', nargs=1, help='creates an ec2 server with ssh key;\t stonemill --ec2-server my_server')
+  parser.add_argument('--windows-ec2-server', nargs=1, help='creates a windows ec2 server;\t stonemill --windows-ec2-server my_windows_server')
   parser.add_argument('--dynamodb-table', nargs=2, help='creates a basic dynamodb table;\t stonemill --dynamodb-table my_accounts account_id')
   parser.add_argument('--indexed-dynamodb-table', nargs=2, help='creates a dynamodb table with a global secondary index;\t stonemill --indexed-dynamodb-table my_accounts account_id email')
   parser.add_argument('--usermanager-ddb-table', nargs=2, help='creates a users dynamodb table with graphql endpoints for addUser and login;\n\t uses strong password salting and hashing for security;\t stonemill --usermanager-ddb-table my_lambda users')
@@ -2850,6 +3061,10 @@ try:
   elif args.ec2_server:
     template_args = ec2_server_template.parse_arguments(server_name = args.ec2_server[0])
     ec2_server_template.mill_template(template_args)
+
+  elif args.windows_ec2_server:
+    template_args = windows_ec2_server_template.parse_arguments(server_name = args.windows_ec2_server[0])
+    windows_ec2_server_template.mill_template(template_args)
 
   elif args.website_s3_bucket:
     template_args = website_s3_bucket_template.parse_arguments(website_name = args.website_s3_bucket[0], domain_name = args.website_s3_bucket[1])
