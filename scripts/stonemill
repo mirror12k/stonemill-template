@@ -1911,6 +1911,22 @@ resource "aws_s3_object" "build_file" {
   etag = filemd5(var.package_build_path)
 }
 
+# # CPU Utilization alarm, will sound when utilization is over 80 percent for two periods
+# resource "aws_cloudwatch_metric_alarm" "cpu_utilization_alarm" {
+#   alarm_name                = "${local.fullname}-cpu_utilization_alarm"
+#   comparison_operator       = "GreaterThanOrEqualToThreshold"
+#   evaluation_periods        = "2"
+#   metric_name               = "CPUUtilization"
+#   namespace                 = "AWS/EC2"
+#   period                    = "120" # seconds
+#   statistic                 = "Average"
+#   threshold                 = "80"
+#   alarm_description         = "This metric monitors ec2 cpu utilization"
+#   alarm_actions = [var.sns_alarm_topic_arn]
+#   dimensions = {
+#     InstanceId = aws_instance.example.id
+#   }
+# }
 
 output "server_ip" { value = "${aws_instance.instance.public_ip}" }
 output "instance_id" { value = "${aws_instance.instance.id}" }
