@@ -1806,10 +1806,12 @@ resource "aws_instance" "instance" {
   runcmd:
     - sleep 5
     - sudo env DEBIAN_FRONTEND=noninteractive apt -y update
-    - sudo env DEBIAN_FRONTEND=noninteractive apt install -y unzip curl awscli
+    - sudo env DEBIAN_FRONTEND=noninteractive apt install -y unzip curl awscli jq
     - sudo mkdir -p /app/log
     - sudo mkdir -p /app/config
     - sudo chown -R ubuntu:ubuntu /app
+    - echo '${local.fullname}' > /app/config/server_fullname
+    - echo '${local.metrics_group}' > /app/config/metrics_group
     - echo '${jsonencode(var.server_config)}' > /app/config/server_config.json
     - echo 's3://${aws_s3_bucket.deploy_bucket.id}/'
     - aws s3 cp s3://${aws_s3_bucket.deploy_bucket.id}/package.zip /app/package.zip
@@ -1876,14 +1878,24 @@ resource "aws_iam_policy" "instance_policy" {
   "Version": "2012-10-17",
   "Statement": [
     {
+      "Effect": "Allow",
       "Action": [
         "s3:Get*",
         "s3:List*"
       ],
-      "Effect": "Allow",
       "Resource": [
         "arn:aws:s3:::${aws_s3_bucket.deploy_bucket.id}",
         "arn:aws:s3:::${aws_s3_bucket.deploy_bucket.id}/*"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+      ],
+      "Resource": [
+        "*"
       ]
     }
   ]
@@ -1933,12 +1945,44 @@ output "instance_id" { value = "${aws_instance.instance.id}" }
 ''')
 ec2_server_install_sh = Definition("src/{{server_name}}/install.sh", text='''#!/bin/sh
 echo "[+] chmoding everything"
-cd /app/package
+cd /app/{{server_name}}
 chmod +x ./*.sh
+
+ARG_METRICS_GROUP=`cat /app/config/metrics_group`
+
+echo "[+] prep aws logs file"
+cat awslogs.cfg.template \
+  | sed "s/{metrics_group}/$ARG_METRICS_GROUP/g" \
+  > /app/config/awslogs.cfg
+
+echo "[+] setup aws logs"
+curl https://s3.amazonaws.com/aws-cloudwatch/downloads/latest/awslogs-agent-setup.py -O
+python2 awslogs-agent-setup.py --region us-east-1 -c /app/config/awslogs.cfg -n
+rm awslogs-agent-setup.py
+
 echo "[+] installing reboot script"
-sudo ln -s /app/package/reboot.sh /var/lib/cloud/scripts/per-boot/reboot-init.sh
-echo "[+] running main server"
-./server-startup.sh
+ln -s /app/{{server_name}}/reboot.sh /var/lib/cloud/scripts/per-boot/reboot-init.sh
+echo "[+] running main server startup"
+su -c /app/{{server_name}}/server-startup.sh ubuntu 2>&1 >> /app/log/init.log
+''')
+ec2_server_startup_sh = Definition("src/{{server_name}}/server-startup.sh", text='''#!/bin/sh
+echo "[i] server startup..."
+cd /app/{{server_name}}
+echo "[+] server startup complete!"
+''')
+ec2_server_reboot_sh = Definition("src/{{server_name}}/reboot.sh", text='''#!/bin/sh
+echo "[+] server rebooted..." 2>&1 >> /app/log/init.log
+su -c /app/{{server_name}}/server-startup.sh ubuntu 2>&1 >> /app/log/init.log
+''')
+ec2_server_awslogs_cfg = Definition("src/{{server_name}}/awslogs.cfg.template", text='''[general]
+state_file = push-state
+
+[logstream1]
+file = /app/log/init.log
+log_group_name = /{metrics_group}/server-logs
+log_stream_name = {instance_id}/init.log
+initial_position = start_of_file
+buffer_duration = 300000
 ''')
 
 
@@ -2139,7 +2183,7 @@ resource "aws_iam_policy" "firehose_policy" {
         "logs:PutLogEvents"
       ],
       "Resource" = [
-        "arn:aws:logs:us-east-1:671999808738:log-group:/aws/kinesisfirehose/${aws_kinesis_firehose_delivery_stream.extended_s3_stream.name}:log-stream:*",
+        "arn:aws:logs:us-east-1:*:log-group:/aws/kinesisfirehose/${aws_kinesis_firehose_delivery_stream.extended_s3_stream.name}:log-stream:*",
       ]
     }, {
       "Effect" = "Allow",
@@ -2321,6 +2365,9 @@ ec2_server_template = TemplateDefinitions('{server_name} server', {
   ec2_server_makefile,
   ec2_server_definition,
   ec2_server_install_sh,
+  ec2_server_startup_sh,
+  ec2_server_reboot_sh,
+  ec2_server_awslogs_cfg,
 ], '''
 ec2 server scaffolding established...
 build with `weasel build_{server_name}_package`
@@ -2751,7 +2798,7 @@ insert SES emails with:
 ses_client = boto3.client('ses', region_name='us-east-1')
 res = ses_client.send_email(
   Destination={ 'ToAddresses': [ email_address ] },
-  Source='noreply@analytics.nixalgo.com',
+  Source='noreply@example.org',
   Message={
     'Subject': { 'Charset': 'UTF-8', 'Data': email_subject },
     'Body': { 'Html': { 'Charset': 'UTF-8', 'Data': email_body } },
