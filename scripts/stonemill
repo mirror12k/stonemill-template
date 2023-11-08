@@ -1825,7 +1825,7 @@ resource "aws_key_pair" "instance_aws_key" {
 }
 
 resource "aws_security_group" "instance_security_group" {
-  name        = "Allow web traffic"
+  name        = "${local.fullname}-security_group"
   description = "Allow ssh and standard http/https ports inbound and everything outbound"
 
   dynamic "ingress" {
