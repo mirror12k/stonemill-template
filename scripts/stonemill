@@ -1771,7 +1771,7 @@ ec2_server_makefile = Definition("./Makefile", append=True, text='''
 build: build_{{server_name}}_package
 build_{{server_name}}_package:
 \t-mkdir build
-\tzip build/{{server_name}}.zip -FSr {{server_name}}/
+\tcd src && zip ../build/{{server_name}}.zip -FSr {{server_name}}/
 \t./scripts/create-keys.sh "{{server_name}}_key"
 ''')
 ec2_server_definition = Definition("infrastructure/{{server_name}}/{{server_name}}.tf", text='''
