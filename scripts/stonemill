@@ -1936,7 +1936,7 @@ resource "aws_s3_object" "build_file" {
 #   alarm_description         = "This metric monitors ec2 cpu utilization"
 #   alarm_actions = [var.sns_alarm_topic_arn]
 #   dimensions = {
-#     InstanceId = aws_instance.example.id
+#     InstanceId = aws_instance.instance.id
 #   }
 # }
 
@@ -1951,8 +1951,8 @@ chmod +x ./*.sh
 ARG_METRICS_GROUP=`cat /app/config/metrics_group`
 
 echo "[+] prep aws logs file"
-cat awslogs.cfg.template \
-  | sed "s/{metrics_group}/$ARG_METRICS_GROUP/g" \
+cat awslogs.cfg.template \\
+  | sed "s#{metrics_group}#$ARG_METRICS_GROUP#g" \\
   > /app/config/awslogs.cfg
 
 echo "[+] setup aws logs"
