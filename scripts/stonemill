@@ -1940,6 +1940,68 @@ resource "aws_s3_object" "build_file" {
 #   }
 # }
 
+output "monitor_widget_json" {
+  value = <<EOF
+  {
+      "type": "metric",
+      "x": 0,
+      "y": 0,
+      "width": 6,
+      "height": 6,
+      "properties": {
+          "view": "timeSeries",
+          "stacked": true,
+          "metrics": [
+              [ "AWS/EC2", "CPUUtilization", "InstanceId", "${aws_instance.instance.id}", { "region": "us-east-1", "id": "m1", "color": "#555" } ]
+          ],
+          "region": "us-east-1",
+          "period": 300,
+          "title": "{{server_name}} CPU Stats",
+          "stat": "Average"
+      }
+  },
+  {
+      "type": "metric",
+      "x": 6,
+      "y": 0,
+      "width": 6,
+      "height": 6,
+      "properties": {
+          "view": "timeSeries",
+          "metrics": [
+              [ "AWS/EC2", "NetworkOut", "InstanceId", "${aws_instance.instance.id}" ],
+              [ ".", "NetworkIn", ".", "." ]
+          ],
+          "region": "us-east-1",
+          "title": "{{server_name}} Network Stats",
+          "stacked": true
+      }
+  }
+EOF
+}
+
+# output "alarm_widget_json" {
+#   value = <<EOF
+#   {
+#       "type": "metric",
+#       "x": 0,
+#       "y": 0,
+#       "width": 6,
+#       "height": 3,
+#       "properties": {
+#           "annotations": {
+#               "alarms": [
+#                   "${aws_cloudwatch_metric_alarm.cpu_utilization_alarm.arn}"
+#               ]
+#           },
+#           "view": "timeSeries",
+#           "title": "{{server_name}} CPU Alarm",
+#           "stacked": false
+#       }
+#   }
+# EOF
+# }
+
 output "server_ip" { value = "${aws_instance.instance.public_ip}" }
 output "instance_id" { value = "${aws_instance.instance.id}" }
 ''')
@@ -2165,6 +2227,68 @@ resource "aws_s3_object" "build_file" {
 #   dimensions = {
 #     InstanceId = aws_instance.example.id
 #   }
+# }
+
+output "monitor_widget_json" {
+  value = <<EOF
+  {
+      "type": "metric",
+      "x": 0,
+      "y": 0,
+      "width": 6,
+      "height": 6,
+      "properties": {
+          "view": "timeSeries",
+          "stacked": true,
+          "metrics": [
+              [ "AWS/EC2", "CPUUtilization", "InstanceId", "${aws_instance.instance.id}", { "region": "us-east-1", "id": "m1", "color": "#555" } ]
+          ],
+          "region": "us-east-1",
+          "period": 300,
+          "title": "{{server_name}} CPU Stats",
+          "stat": "Average"
+      }
+  },
+  {
+      "type": "metric",
+      "x": 6,
+      "y": 0,
+      "width": 6,
+      "height": 6,
+      "properties": {
+          "view": "timeSeries",
+          "metrics": [
+              [ "AWS/EC2", "NetworkOut", "InstanceId", "${aws_instance.instance.id}" ],
+              [ ".", "NetworkIn", ".", "." ]
+          ],
+          "region": "us-east-1",
+          "title": "{{server_name}} Network Stats",
+          "stacked": true
+      }
+  }
+EOF
+}
+
+# output "alarm_widget_json" {
+#   value = <<EOF
+#   {
+#       "type": "metric",
+#       "x": 0,
+#       "y": 0,
+#       "width": 6,
+#       "height": 3,
+#       "properties": {
+#           "annotations": {
+#               "alarms": [
+#                   "${aws_cloudwatch_metric_alarm.cpu_utilization_alarm.arn}"
+#               ]
+#           },
+#           "view": "timeSeries",
+#           "title": "{{server_name}} CPU Alarm",
+#           "stacked": false
+#       }
+#   }
+# EOF
 # }
 
 output "server_ip" { value = "${aws_instance.instance.public_ip}" }
