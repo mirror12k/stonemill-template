@@ -1785,6 +1785,7 @@ variable "ingress_ports" { default = [22] }
 variable "server_config" { default = {} }
 
 locals {
+  servername = "{{server_name}}"
   fullname = "${var.infragroup_fullname}-{{server_name}}"
   metrics_group = "${var.metrics_path}/{{server_name}}"
 }
@@ -1923,6 +1924,7 @@ resource "aws_s3_object" "build_file" {
   etag = filemd5(var.package_build_path)
 }
 
+
 # # CPU Utilization alarm, will sound when utilization is over 80 percent for two periods
 # resource "aws_cloudwatch_metric_alarm" "cpu_utilization_alarm" {
 #   alarm_name                = "${local.fullname}-cpu_utilization_alarm"
@@ -1930,15 +1932,53 @@ resource "aws_s3_object" "build_file" {
 #   evaluation_periods        = "2"
 #   metric_name               = "CPUUtilization"
 #   namespace                 = "AWS/EC2"
-#   period                    = "120" # seconds
+#   period                    = 300
 #   statistic                 = "Average"
-#   threshold                 = "80"
+#   threshold                 = 80
 #   alarm_description         = "This metric monitors ec2 cpu utilization"
 #   alarm_actions = [var.sns_alarm_topic_arn]
 #   dimensions = {
 #     InstanceId = aws_instance.instance.id
 #   }
 # }
+
+# # CPU Utilization alarm, will sound when utilization is over 80 percent for two periods
+# resource "aws_cloudwatch_metric_alarm" "disk_used_alarm" {
+#   alarm_name                = "${local.fullname}-disk_used_alarm"
+#   comparison_operator       = "GreaterThanOrEqualToThreshold"
+#   evaluation_periods        = "2"
+#   metric_name               = "disk_used_percent"
+#   namespace                 = "CWAgent"
+#   period                    = 300
+#   statistic                 = "Average"
+#   threshold                 = 80
+#   alarm_description         = "This metric monitors ec2 disk used percent"
+#   alarm_actions = [var.sns_alarm_topic_arn]
+#   dimensions = {
+#     InstanceId = aws_instance.instance.id
+#     device = "xvda1"
+#     fstype = "ext4"
+#     path = "/"
+#   }
+# }
+
+# # Memory Utilization alarm, will sound when memory utilization is over 90 percent for two periods
+# resource "aws_cloudwatch_metric_alarm" "mem_used_alarm" {
+#   alarm_name                = "${local.fullname}-mem_used_alarm"
+#   comparison_operator       = "GreaterThanOrEqualToThreshold"
+#   evaluation_periods        = "2"
+#   metric_name               = "mem_used_percent"
+#   namespace                 = "CWAgent"
+#   period                    = 300
+#   statistic                 = "Average"
+#   threshold                 = 90
+#   alarm_description         = "This metric monitors ec2 memory used percent"
+#   alarm_actions = [var.sns_alarm_topic_arn]
+#   dimensions = {
+#     InstanceId = aws_instance.instance.id
+#   }
+# }
+
 
 output "monitor_widget_json" {
   value = <<EOF
@@ -1956,7 +1996,7 @@ output "monitor_widget_json" {
           ],
           "region": "us-east-1",
           "period": 300,
-          "title": "{{server_name}} CPU Stats",
+          "title": "${local.servername} CPU Stats",
           "stat": "Average"
       }
   },
@@ -1973,8 +2013,74 @@ output "monitor_widget_json" {
               [ ".", "NetworkIn", ".", "." ]
           ],
           "region": "us-east-1",
-          "title": "{{server_name}} Network Stats",
+          "title": "${local.servername} Network Stats",
           "stacked": true
+      }
+  },
+  {
+      "type": "metric",
+      "x": 18,
+      "y": 0,
+      "width": 6,
+      "height": 3,
+      "properties": {
+          "view": "timeSeries",
+          "stacked": true,
+          "metrics": [
+              [ "CWAgent", "disk_used_percent", "path", "/", "InstanceId", "${aws_instance.instance.id}", "device", "xvda1", "fstype", "ext4" ]
+          ],
+          "title": "${local.servername} Percent Disk Used",
+          "region": "us-east-1"
+      }
+  },
+  {
+      "type": "metric",
+      "x": 18,
+      "y": 3,
+      "width": 6,
+      "height": 3,
+      "properties": {
+          "view": "timeSeries",
+          "stacked": true,
+          "metrics": [
+              [ "CWAgent", "mem_used_percent", "InstanceId", "${aws_instance.instance.id}" ]
+          ],
+          "title": "${local.servername} Percent Memory Used",
+          "region": "us-east-1"
+      }
+  },
+  {
+      "type": "metric",
+      "x": 18,
+      "y": 6,
+      "width": 6,
+      "height": 3,
+      "properties": {
+          "view": "timeSeries",
+          "stacked": false,
+          "metrics": [
+              [ "CWAgent", "netstat_tcp_listen", "InstanceId", "${aws_instance.instance.id}" ],
+              [ ".", "netstat_tcp_established", ".", "." ]
+          ],
+          "title": "${local.servername} Network Connections",
+          "region": "us-east-1"
+      }
+  },
+  {
+      "type": "metric",
+      "x": 18,
+      "y": 9,
+      "width": 6,
+      "height": 3,
+      "properties": {
+          "view": "timeSeries",
+          "stacked": false,
+          "metrics": [
+              [ "CWAgent", "processes_running", "InstanceId", "${aws_instance.instance.id}" ],
+              [ ".", "processes_total", ".", "." ]
+          ],
+          "title": "${local.servername} Process Counts",
+          "region": "us-east-1"
       }
   }
 EOF
@@ -1995,7 +2101,41 @@ EOF
 #               ]
 #           },
 #           "view": "timeSeries",
-#           "title": "{{server_name}} CPU Alarm",
+#           "title": "${local.servername} CPU Alarm",
+#           "stacked": false
+#       }
+#   },
+#   {
+#       "type": "metric",
+#       "x": 6,
+#       "y": 0,
+#       "width": 6,
+#       "height": 3,
+#       "properties": {
+#           "annotations": {
+#               "alarms": [
+#                   "${aws_cloudwatch_metric_alarm.disk_used_alarm.arn}"
+#               ]
+#           },
+#           "view": "timeSeries",
+#           "title": "${local.servername} Disk Alarm",
+#           "stacked": false
+#       }
+#   },
+#   {
+#       "type": "metric",
+#       "x": 0,
+#       "y": 0,
+#       "width": 6,
+#       "height": 3,
+#       "properties": {
+#           "annotations": {
+#               "alarms": [
+#                   "${aws_cloudwatch_metric_alarm.mem_used_alarm.arn}"
+#               ]
+#           },
+#           "view": "timeSeries",
+#           "title": "${local.servername} Memory Alarm",
 #           "stacked": false
 #       }
 #   }
@@ -2018,9 +2158,21 @@ cat awslogs.cfg.template \\
   > /app/config/awslogs.cfg
 
 echo "[+] setup aws logs"
+env DEBIAN_FRONTEND=noninteractive apt install -y python2
 curl https://s3.amazonaws.com/aws-cloudwatch/downloads/latest/awslogs-agent-setup.py -O
 python2 awslogs-agent-setup.py --region us-east-1 -c /app/config/awslogs.cfg -n
 rm awslogs-agent-setup.py
+
+echo "[+] setup aws metrics"
+wget https://s3.amazonaws.com/amazoncloudwatch-agent/debian/amd64/latest/amazon-cloudwatch-agent.deb
+dpkg -i -E ./amazon-cloudwatch-agent.deb
+rm amazon-cloudwatch-agent.deb
+echo "[+] configuring aws metrics config file"
+cat amazon-cloudwatch-agent.json.template \\
+  | sed "s#{metrics_group}#$ARG_METRICS_GROUP#g" \\
+  > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
+echo "[+] restarting metrics daemon"
+systemctl restart amazon-cloudwatch-agent
 
 echo "[+] installing reboot script"
 ln -s /app/{{server_name}}/reboot.sh /var/lib/cloud/scripts/per-boot/reboot-init.sh
@@ -2036,6 +2188,32 @@ ec2_server_reboot_sh = Definition("src/{{server_name}}/reboot.sh", text='''#!/bi
 echo "[+] server rebooted..." 2>&1 >> /app/log/init.log
 su -c /app/{{server_name}}/server-startup.sh ubuntu 2>&1 >> /app/log/init.log
 ''')
+ec2_server_daemonize_sh = Definition("src/{{server_name}}/daemonize.sh", text='''#!/bin/sh
+DIRPATH=`dirname "$0"`
+
+echo "[+] adding user '$1'"
+sudo useradd "$1" && {
+  echo "[+] user created, initializing home folder"
+  sudo mkdir "/home/$1"
+  sudo chown $1:$1 "/home/$1"
+
+  echo "[+] initializing log"
+  touch "$3"
+  sudo chown $1:$1 "$3"
+} || echo "[-] user already exists"
+
+echo "[+] starting daemon"
+sudo su "$1" -c "nohup \\"$DIRPATH/keepalive.sh\\" \\"$2\\" < \\"$4\\" >> \\"$3\\" 2>&1 &"
+''')
+ec2_server_keepalive_sh = Definition("src/{{server_name}}/keepalive.sh", text='''#!/bin/sh
+TIMEOUT_TIME=30
+until $1; do
+    echo "[!] command '$1' crashed with exit code $?, sleeping for $TIMEOUT_TIME"
+    sleep $TIMEOUT_TIME
+    echo "[!] respawning..."
+    TIMEOUT_TIME=$(($TIMEOUT_TIME+30))
+done
+''')
 ec2_server_awslogs_cfg = Definition("src/{{server_name}}/awslogs.cfg.template", text='''[general]
 state_file = push-state
 
@@ -2045,6 +2223,690 @@ log_group_name = /{metrics_group}/server-logs
 log_stream_name = {instance_id}/init.log
 initial_position = start_of_file
 buffer_duration = 300000
+''')
+ec2_server_cwagent_cfg = Definition("src/{{server_name}}/amazon-cloudwatch-agent.json.template", text='''{
+  "agent": {
+    "metrics_collection_interval": 60,
+    "run_as_user": "cwagent"
+  },
+  "metrics": {
+    "append_dimensions": {
+      "InstanceId": "${aws:InstanceId}"
+    },
+    "metrics_collected": {
+      "disk": {
+        "measurement": [ "used_percent" ],
+        "metrics_collection_interval": 60,
+        "resources": [ "/" ]
+      },
+      "mem": {
+        "measurement": [ "mem_available", "mem_free", "mem_used", "mem_used_percent" ],
+        "metrics_collection_interval": 60,
+        "resources": [ "/" ]
+      },
+      "netstat": {
+        "measurement": [ "netstat_tcp_established", "netstat_tcp_listen" ],
+        "metrics_collection_interval": 60,
+        "resources": [ "/" ]
+      },
+      "processes": {
+        "measurement": [ "processes_running", "processes_total" ],
+        "metrics_collection_interval": 60,
+        "resources": [ "/" ]
+      }
+    }
+  }
+}''')
+
+
+
+bastion_ec2_server_module = ec2_server_module.but_replace('''server_config = {}''', '''server_config = {}
+  domain_name = local.domain_name
+  # domain_acm_cert_arn = local.domain_acm_cert_arn
+''')
+bastion_ec2_server_definition = Definition("infrastructure/{{server_name}}/{{server_name}}.tf", text='''
+variable "infragroup_fullname" { type = string }
+variable "sns_alarm_topic_arn" { type = string }
+variable "metrics_path" { type = string }
+
+variable "package_build_path" { type = string }
+variable "ssh_keypath" { type = string }
+variable "ingress_ports" { default = [3000] }
+variable "availability_zones" { default = ["us-east-1a", "us-east-1b", "us-east-1c"] }
+variable "server_config" { default = {} }
+
+variable "domain_name" { type = string }
+# variable "domain_acm_cert_arn" { type = string }
+
+locals {
+  servername = "{{server_name}}"
+  fullname = "${var.infragroup_fullname}-{{server_name}}"
+  metrics_group = "${var.metrics_path}/{{server_name}}"
+}
+
+resource "aws_instance" "instance" {
+  ami           = "ami-0e14491966b97e8bc"
+  instance_type = "t2.medium"
+
+  key_name = aws_key_pair.instance_aws_key.id
+  iam_instance_profile = aws_iam_instance_profile.instance_profile.id
+
+  # security_groups = [aws_security_group.instance_security_group.name]
+  subnet_id = aws_subnet.instance_vpc_public_subnet["subnet_d"].id
+  vpc_security_group_ids = [aws_security_group.instance_security_group.id]
+
+  root_block_device {
+    volume_size = 20
+  }
+
+  user_data = <<-EOT
+  #cloud-config
+  runcmd:
+    - sleep 5
+    - sudo env DEBIAN_FRONTEND=noninteractive apt -y update
+    - sudo env DEBIAN_FRONTEND=noninteractive apt install -y unzip curl awscli jq
+    - sudo mkdir -p /app/log
+    - sudo mkdir -p /app/config
+    - sudo chown -R ubuntu:ubuntu /app
+    - echo '${local.fullname}' > /app/config/server_fullname
+    - echo '${local.metrics_group}' > /app/config/metrics_group
+    - echo '${jsonencode(var.server_config)}' > /app/config/server_config.json
+    - echo 's3://${aws_s3_bucket.deploy_bucket.id}/'
+    - aws s3 cp s3://${aws_s3_bucket.deploy_bucket.id}/package.zip /app/package.zip
+    - unzip /app/package.zip -d /app
+    - sudo chown -R ubuntu:ubuntu /app
+    - cd /app/{{server_name}} && chmod +x *.sh && ./install.sh 2>&1 >> /app/log/init.log
+  EOT
+}
+
+resource "aws_key_pair" "instance_aws_key" {
+  key_name_prefix = "${local.fullname}-aws_key"
+  public_key = file("${var.ssh_keypath}.pub")
+}
+
+resource "aws_security_group" "instance_security_group" {
+  vpc_id = aws_vpc.instance_vpc.id
+
+  name        = "${local.fullname}-security_group"
+  description = "Allow ssh and standard http/https ports inbound and everything outbound"
+
+  dynamic "ingress" {
+    for_each = var.ingress_ports
+    iterator = port
+    content {
+      from_port   = port.value
+      to_port     = port.value
+      protocol    = "TCP"
+      security_groups = [aws_security_group.instance_alb_security_group.id]
+    }
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+
+####################################
+# instance IAM role and policy attachments
+resource "aws_iam_instance_profile" "instance_profile" {
+  name = "${local.fullname}-instance_profile"
+  role = aws_iam_role.instance_role.name
+}
+
+resource "aws_iam_role" "instance_role" {
+  name = "${local.fullname}-instance_role"
+  path = "/"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action = "sts:AssumeRole"
+      Effect = "Allow"
+      Principal = {
+        Service = "ec2.amazonaws.com"
+      }
+    }]
+  })
+}
+
+# primary IAM policy for the instance
+resource "aws_iam_policy" "instance_policy" {
+  name = "${local.fullname}-instance_policy"
+
+  policy = <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:Get*",
+        "s3:List*"
+      ],
+      "Resource": [
+        "arn:aws:s3:::${aws_s3_bucket.deploy_bucket.id}",
+        "arn:aws:s3:::${aws_s3_bucket.deploy_bucket.id}/*"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "cloudwatch:PutMetricData",
+        "logs:PutLogEvents",
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+      ],
+      "Resource": [
+        "*"
+      ]
+    }
+  ]
+}
+EOF
+}
+resource "aws_iam_policy_attachment" "instance_policy_attachment" {
+  name       = "${local.fullname}-instance_policy_attachment"
+  roles      = [aws_iam_role.instance_role.name]
+  policy_arn = aws_iam_policy.instance_policy.arn
+}
+# SSM policy is needed for AWS SSM to work on the instance
+data "aws_iam_policy" "AmazonSSMManagedInstanceCore" {
+  arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+resource "aws_iam_policy_attachment" "instance_managed_policy_attachment" {
+  name       = "${local.fullname}-instance_managed_policy_attachment"
+  roles      = [aws_iam_role.instance_role.name]
+  policy_arn = data.aws_iam_policy.AmazonSSMManagedInstanceCore.arn
+}
+####################################
+
+
+
+####################################
+# S3 deployment bucket (optional if you don't need a deployment package)
+resource "random_id" "deploy_bucket_random_id" { byte_length = 24 }
+resource "aws_s3_bucket" "deploy_bucket" {
+  bucket = "deploypackage-${random_id.deploy_bucket_random_id.hex}"
+  force_destroy = true
+}
+
+resource "aws_s3_object" "build_file" {
+  bucket = aws_s3_bucket.deploy_bucket.id
+  key = "package.zip"
+  source = var.package_build_path
+  etag = filemd5(var.package_build_path)
+}
+####################################
+
+
+####################################
+# VPC and networking for the instance
+resource "aws_vpc" "instance_vpc" {
+  cidr_block = "10.0.0.0/16"
+}
+
+resource "aws_subnet" "instance_vpc_private_subnet" {
+  for_each = {
+      subnet_a = {
+        range = "10.0.1.0/24"
+        availability_zone = var.availability_zones[0]
+      },
+      subnet_b = {
+        range = "10.0.2.0/24"
+        availability_zone = var.availability_zones[1]
+      },
+      subnet_c = {
+        range = "10.0.3.0/24"
+        availability_zone = var.availability_zones[2]
+      },
+  }
+
+  vpc_id = aws_vpc.instance_vpc.id
+  cidr_block = each.value["range"]
+  availability_zone = each.value["availability_zone"]
+}
+
+resource "aws_subnet" "instance_vpc_public_subnet" {
+  for_each = {
+      subnet_d = {
+        range = "10.0.4.0/24"
+        availability_zone = var.availability_zones[0]
+      },
+      subnet_e = {
+        range = "10.0.5.0/24"
+        availability_zone = var.availability_zones[1]
+      },
+      subnet_f = {
+        range = "10.0.6.0/24"
+        availability_zone = var.availability_zones[2]
+      },
+  }
+
+  vpc_id = aws_vpc.instance_vpc.id
+  cidr_block = each.value["range"]
+  availability_zone = each.value["availability_zone"]
+  map_public_ip_on_launch = true
+}
+
+resource "aws_internet_gateway" "instance_vpc_internet_gateway" {
+  vpc_id = aws_vpc.instance_vpc.id
+}
+resource "aws_route_table" "instance_vpc_route_table" {
+  vpc_id = aws_vpc.instance_vpc.id
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.instance_vpc_internet_gateway.id
+  }
+}
+resource "aws_route_table_association" "instance_vpc_private_route_table_association" {
+  for_each = aws_subnet.instance_vpc_private_subnet
+  subnet_id      = each.value.id
+  route_table_id = aws_route_table.instance_vpc_route_table.id
+}
+resource "aws_route_table_association" "instance_vpc_public_route_table_association" {
+  for_each = aws_subnet.instance_vpc_public_subnet
+  subnet_id      = each.value.id
+  route_table_id = aws_route_table.instance_vpc_route_table.id
+}
+
+####################################
+
+####################################
+# ALB and targeting
+resource "aws_lb" "instance_alb" {
+  name               = replace("${var.infragroup_fullname}-alb", "_", "-")
+  internal           = false
+  load_balancer_type = "application"
+  security_groups    = [aws_security_group.instance_alb_security_group.id]
+  subnets            = [
+    aws_subnet.instance_vpc_public_subnet["subnet_d"].id,
+    aws_subnet.instance_vpc_public_subnet["subnet_e"].id
+  ]
+}
+resource "aws_security_group" "instance_alb_security_group" {
+  vpc_id = aws_vpc.instance_vpc.id
+
+  name        = "${local.fullname}-alb_security_group"
+  description = "Allows only 443 for the ALB"
+
+  dynamic "ingress" {
+    for_each = [ 443 ]
+    iterator = port
+    content {
+      from_port   = port.value
+      to_port     = port.value
+      protocol    = "TCP"
+      cidr_blocks = ["0.0.0.0/0"]
+    }
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+resource "aws_lb_listener" "instance_alb_listener" {
+  load_balancer_arn = aws_lb.instance_alb.arn
+
+  port              = 443
+  protocol          = "HTTPS"
+
+  # ssl_policy        = "ELBSecurityPolicy-2016-08"
+  certificate_arn   = var.domain_acm_cert_arn
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.instance_alb_target_group.arn
+  }
+}
+resource "aws_lb_target_group" "instance_alb_target_group" {
+  name = replace("${var.infragroup_fullname}-atg", "_", "-")
+  port = 3000
+  protocol    = "HTTP"
+  # target_type = "ip"
+  vpc_id      = aws_vpc.instance_vpc.id
+
+  health_check {
+    interval = 300
+    protocol = "HTTP"
+  }
+}
+resource "aws_lb_target_group_attachment" "instance_alb_target_group_attachment" {
+  target_group_arn = aws_lb_target_group.instance_alb_target_group.arn
+  target_id        = aws_instance.instance.id
+  port             = 3000
+}
+####################################
+
+# ####################################
+# # CloudFront distribution for fronting the LB
+# resource "aws_cloudfront_distribution" "instance_distribution" {
+#   origin {
+#     domain_name              = aws_lb.instance_alb.dns_name
+#     origin_id                = "alb_origin"
+
+#     custom_origin_config {
+#       http_port                = 80
+#       https_port               = 443
+#       origin_keepalive_timeout = 5
+#       origin_protocol_policy   = "https-only"
+#       origin_read_timeout      = 30
+#       origin_ssl_protocols     = [ "TLSv1.2" ]
+#     }
+#   }
+
+#   aliases = [ var.domain_name ]
+
+#   enabled             = true
+#   is_ipv6_enabled     = true
+#   default_root_object = "/"
+
+#   default_cache_behavior {
+#     allowed_methods  = [ "DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT" ]
+#     cached_methods   = [ "GET", "HEAD" ]
+#     target_origin_id = "alb_origin"
+
+#     cache_policy_id          = "4135ea2d-6df8-44a3-9df3-4b5a84be39ad"
+#     origin_request_policy_id = "216adef6-5c7f-47e4-b989-5492eafa07d3"
+
+#     viewer_protocol_policy = "allow-all"
+#   }
+
+#   restrictions {
+#     geo_restriction {
+#       restriction_type = "none"
+#       locations        = []
+#     }
+#   }
+
+#   price_class = "PriceClass_100"
+
+#   viewer_certificate {
+#     acm_certificate_arn = var.domain_acm_cert_arn
+#     ssl_support_method = "sni-only"
+#   }
+# }
+# ####################################
+
+
+
+# # CPU Utilization alarm, will sound when utilization is over 80 percent for two periods
+# resource "aws_cloudwatch_metric_alarm" "cpu_utilization_alarm" {
+#   alarm_name                = "${local.fullname}-cpu_utilization_alarm"
+#   comparison_operator       = "GreaterThanOrEqualToThreshold"
+#   evaluation_periods        = "2"
+#   metric_name               = "CPUUtilization"
+#   namespace                 = "AWS/EC2"
+#   period                    = 300
+#   statistic                 = "Average"
+#   threshold                 = 80
+#   alarm_description         = "This metric monitors ec2 cpu utilization"
+#   alarm_actions = [var.sns_alarm_topic_arn]
+#   dimensions = {
+#     InstanceId = aws_instance.instance.id
+#   }
+# }
+
+# # CPU Utilization alarm, will sound when utilization is over 80 percent for two periods
+# resource "aws_cloudwatch_metric_alarm" "disk_used_alarm" {
+#   alarm_name                = "${local.fullname}-disk_used_alarm"
+#   comparison_operator       = "GreaterThanOrEqualToThreshold"
+#   evaluation_periods        = "2"
+#   metric_name               = "disk_used_percent"
+#   namespace                 = "CWAgent"
+#   period                    = 300
+#   statistic                 = "Average"
+#   threshold                 = 80
+#   alarm_description         = "This metric monitors ec2 disk used percent"
+#   alarm_actions = [var.sns_alarm_topic_arn]
+#   dimensions = {
+#     InstanceId = aws_instance.instance.id
+#     device = "xvda1"
+#     fstype = "ext4"
+#     path = "/"
+#   }
+# }
+
+# # Memory Utilization alarm, will sound when memory utilization is over 90 percent for two periods
+# resource "aws_cloudwatch_metric_alarm" "mem_used_alarm" {
+#   alarm_name                = "${local.fullname}-mem_used_alarm"
+#   comparison_operator       = "GreaterThanOrEqualToThreshold"
+#   evaluation_periods        = "2"
+#   metric_name               = "mem_used_percent"
+#   namespace                 = "CWAgent"
+#   period                    = 300
+#   statistic                 = "Average"
+#   threshold                 = 90
+#   alarm_description         = "This metric monitors ec2 memory used percent"
+#   alarm_actions = [var.sns_alarm_topic_arn]
+#   dimensions = {
+#     InstanceId = aws_instance.instance.id
+#   }
+# }
+
+
+output "monitor_widget_json" {
+  value = <<EOF
+  {
+      "type": "metric",
+      "x": 0,
+      "y": 0,
+      "width": 6,
+      "height": 6,
+      "properties": {
+          "view": "timeSeries",
+          "stacked": true,
+          "metrics": [
+              [ "AWS/EC2", "CPUUtilization", "InstanceId", "${aws_instance.instance.id}", { "region": "us-east-1", "id": "m1", "color": "#555" } ]
+          ],
+          "region": "us-east-1",
+          "period": 300,
+          "title": "${local.servername} CPU Stats",
+          "stat": "Average"
+      }
+  },
+  {
+      "type": "metric",
+      "x": 6,
+      "y": 0,
+      "width": 6,
+      "height": 6,
+      "properties": {
+          "view": "timeSeries",
+          "metrics": [
+              [ "AWS/EC2", "NetworkOut", "InstanceId", "${aws_instance.instance.id}" ],
+              [ ".", "NetworkIn", ".", "." ]
+          ],
+          "region": "us-east-1",
+          "title": "${local.servername} Network Stats",
+          "stacked": true
+      }
+  },
+  {
+      "type": "metric",
+      "x": 12,
+      "y": 0,
+      "width": 6,
+      "height": 6,
+      "properties": {
+          "title": "${local.servername} Requests",
+          "metrics": [
+              [ "AWS/CloudFront", "Requests", "Region", "Global", "DistributionId", "${aws_cloudfront_distribution.instance_distribution.id}", { "region": "us-east-1", "color": "#aec7e8" } ]
+          ],
+          "view": "timeSeries",
+          "stacked": true,
+          "region": "us-east-1",
+          "period": 300,
+          "stat": "Average"
+      }
+  },
+  {
+      "type": "metric",
+      "x": 18,
+      "y": 0,
+      "width": 6,
+      "height": 3,
+      "properties": {
+          "view": "timeSeries",
+          "stacked": true,
+          "metrics": [
+              [ "CWAgent", "disk_used_percent", "path", "/", "InstanceId", "${aws_instance.instance.id}", "device", "xvda1", "fstype", "ext4" ]
+          ],
+          "title": "${local.servername} Percent Disk Used",
+          "region": "us-east-1"
+      }
+  },
+  {
+      "type": "metric",
+      "x": 18,
+      "y": 3,
+      "width": 6,
+      "height": 3,
+      "properties": {
+          "view": "timeSeries",
+          "stacked": true,
+          "metrics": [
+              [ "CWAgent", "mem_used_percent", "InstanceId", "${aws_instance.instance.id}" ]
+          ],
+          "title": "${local.servername} Percent Memory Used",
+          "region": "us-east-1"
+      }
+  },
+  {
+      "type": "metric",
+      "x": 18,
+      "y": 6,
+      "width": 6,
+      "height": 3,
+      "properties": {
+          "view": "timeSeries",
+          "stacked": false,
+          "metrics": [
+              [ "CWAgent", "netstat_tcp_listen", "InstanceId", "${aws_instance.instance.id}" ],
+              [ ".", "netstat_tcp_established", ".", "." ]
+          ],
+          "title": "${local.servername} Network Connections",
+          "region": "us-east-1"
+      }
+  },
+  {
+      "type": "metric",
+      "x": 18,
+      "y": 9,
+      "width": 6,
+      "height": 3,
+      "properties": {
+          "view": "timeSeries",
+          "stacked": false,
+          "metrics": [
+              [ "CWAgent", "processes_running", "InstanceId", "${aws_instance.instance.id}" ],
+              [ ".", "processes_total", ".", "." ]
+          ],
+          "title": "${local.servername} Process Counts",
+          "region": "us-east-1"
+      }
+  }
+EOF
+}
+
+# output "alarm_widget_json" {
+#   value = <<EOF
+#   {
+#       "type": "metric",
+#       "x": 0,
+#       "y": 0,
+#       "width": 6,
+#       "height": 3,
+#       "properties": {
+#           "annotations": {
+#               "alarms": [
+#                   "${aws_cloudwatch_metric_alarm.cpu_utilization_alarm.arn}"
+#               ]
+#           },
+#           "view": "timeSeries",
+#           "title": "${local.servername} CPU Alarm",
+#           "stacked": false
+#       }
+#   },
+#   {
+#       "type": "metric",
+#       "x": 6,
+#       "y": 0,
+#       "width": 6,
+#       "height": 3,
+#       "properties": {
+#           "annotations": {
+#               "alarms": [
+#                   "${aws_cloudwatch_metric_alarm.disk_used_alarm.arn}"
+#               ]
+#           },
+#           "view": "timeSeries",
+#           "title": "${local.servername} Disk Alarm",
+#           "stacked": false
+#       }
+#   },
+#   {
+#       "type": "metric",
+#       "x": 0,
+#       "y": 0,
+#       "width": 6,
+#       "height": 3,
+#       "properties": {
+#           "annotations": {
+#               "alarms": [
+#                   "${aws_cloudwatch_metric_alarm.mem_used_alarm.arn}"
+#               ]
+#           },
+#           "view": "timeSeries",
+#           "title": "${local.servername} Memory Alarm",
+#           "stacked": false
+#       }
+#   }
+# EOF
+# }
+
+output "server_ip" { value = "${aws_instance.instance.public_ip}" }
+output "instance_id" { value = "${aws_instance.instance.id}" }
+''')
+bastion_ec2_server_install_sh = ec2_server_install_sh.but_replace('''/var/lib/cloud/scripts/per-boot/reboot-init.sh''',
+  '''/var/lib/cloud/scripts/per-boot/reboot-init.sh
+
+echo "[i] installing dependencies..."
+env DEBIAN_FRONTEND=noninteractive apt install -y docker.io docker-compose
+echo "[+] dependencies installed!"
+
+echo "[+] adding user to docker group"
+usermod -aG docker ubuntu
+
+''')
+bastion_ec2_server_startup_sh = Definition("src/{{server_name}}/server-startup.sh", text='''#!/bin/sh
+# this script runs every time the server is started or restarted
+# it runs with ubuntu user privileges. use sudo where necessary
+
+echo "[i] server startup..."
+cd "$(dirname "$0")"
+
+mkdir server
+cp docker-compose.yml.template server/docker-compose.yml
+
+echo "[+] details prepared, starting docker-compose..."
+./daemonize.sh ubuntu "$(dirname "$0")/run-docker.sh" /app/log/server.log /dev/null
+
+echo "[+] server startup complete!"
+''')
+bastion_ec2_server_rundocker_sh = Definition("src/{{server_name}}/run-docker.sh", text='''#!/bin/sh
+# this is where your server magic runs
+cd "$(dirname "$0")" && cd ./server
+docker-compose up
+''')
+bastion_ec2_server_dockercompose_template = Definition("src/{{server_name}}/docker-compose.yml.template", text='''
+put your magic here
 ''')
 
 
@@ -2677,7 +3539,10 @@ ec2_server_template = TemplateDefinitions('{server_name} server', {
   ec2_server_install_sh,
   ec2_server_startup_sh,
   ec2_server_reboot_sh,
+  ec2_server_daemonize_sh,
+  ec2_server_keepalive_sh,
   ec2_server_awslogs_cfg,
+  ec2_server_cwagent_cfg,
 ], '''
 ec2 server scaffolding established...
 build with `weasel build_{server_name}_package`
@@ -2692,9 +3557,6 @@ windows_ec2_server_template = TemplateDefinitions('{server_name} windows server'
   ec2_server_module,
   ec2_server_makefile,
   windows_ec2_server_definition,
-  ec2_server_install_sh,
-  ec2_server_startup_sh,
-  ec2_server_reboot_sh,
   ec2_server_awslogs_cfg,
 ], '''
 windows ec2 server scaffolding established...
@@ -2707,6 +3569,31 @@ rdp into the server to access it.
 
 helpful one-liner to install chrome from powershell:
 `$Path = $env:TEMP; $Installer = 'chrome_installer.exe'; Invoke-WebRequest -Uri 'http://dl.google.com/chrome/install/375.126/chrome_installer.exe' -OutFile $Path\$Installer; Start-Process -FilePath $Path\$Installer -Args '/silent /install' -Verb RunAs -Wait; Remove-Item -Path $Path\$Installer`
+''')
+
+
+bastion_ec2_server_template = TemplateDefinitions('{server_name} bastion server', {
+  'server_name': r"^[a-zA-Z_][a-zA-Z0-9_]+$",
+}, [
+  bastion_ec2_server_module,
+  ec2_server_makefile,
+  bastion_ec2_server_definition,
+  bastion_ec2_server_install_sh,
+  bastion_ec2_server_startup_sh,
+  ec2_server_reboot_sh,
+  ec2_server_daemonize_sh,
+  ec2_server_keepalive_sh,
+  ec2_server_awslogs_cfg,
+  ec2_server_cwagent_cfg,
+  bastion_ec2_server_rundocker_sh,
+  bastion_ec2_server_dockercompose_template,
+], '''
+bastion ec2 server scaffolding established...
+build with `weasel build_{server_name}_package`
+SSH is discouraged with this setup, instead use SSM to login to the server: `./scripts/ssm-into.sh {server_name}`
+
+this server is configured to be protected behind an ALB and a CloudFront distribution, with a strict security group preventing direct access
+keep in mind that ALBs and EC2 servers are expensive to run!
 ''')
 
 
@@ -3167,6 +4054,7 @@ try:
   parser.add_argument('--website-s3-bucket', nargs=2, help='creates an s3 bucket for hosting a react site;\t stonemill --website-s3-bucket my_website myspecialfrontend.com')
   parser.add_argument('--ec2-server', nargs=1, help='creates an ec2 server with ssh key;\t stonemill --ec2-server my_server')
   parser.add_argument('--windows-ec2-server', nargs=1, help='creates a windows ec2 server;\t stonemill --windows-ec2-server my_windows_server')
+  parser.add_argument('--bastion-ec2-server', nargs=1, help='creates a bastion ec2 server with CF and ALB;\t stonemill --bastion-ec2-server my_bastion')
   parser.add_argument('--dynamodb-table', nargs=2, help='creates a basic dynamodb table;\t stonemill --dynamodb-table my_accounts account_id')
   parser.add_argument('--indexed-dynamodb-table', nargs=2, help='creates a dynamodb table with a global secondary index;\t stonemill --indexed-dynamodb-table my_accounts account_id email')
   parser.add_argument('--usermanager-ddb-table', nargs=2, help='creates a users dynamodb table with graphql endpoints for addUser and login;\n\t uses strong password salting and hashing for security;\t stonemill --usermanager-ddb-table my_lambda users')
@@ -3189,6 +4077,10 @@ try:
   elif args.windows_ec2_server:
     template_args = windows_ec2_server_template.parse_arguments(server_name = args.windows_ec2_server[0])
     windows_ec2_server_template.mill_template(template_args)
+
+  elif args.bastion_ec2_server:
+    template_args = bastion_ec2_server_template.parse_arguments(server_name = args.bastion_ec2_server[0])
+    bastion_ec2_server_template.mill_template(template_args)
 
   elif args.website_s3_bucket:
     template_args = website_s3_bucket_template.parse_arguments(website_name = args.website_s3_bucket[0], domain_name = args.website_s3_bucket[1])
