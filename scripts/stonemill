@@ -2153,6 +2153,9 @@ echo "[+] chmoding everything"
 cd /app/{{server_name}}
 chmod +x ./*.sh
 
+echo "[+] installing unattended-upgrades for automated package updates"
+env DEBIAN_FRONTEND=noninteractive apt install -y unattended-upgrades apt-listchanges
+
 ARG_METRICS_GROUP=`cat /app/config/metrics_group`
 
 echo "[+] prep aws logs file"
@@ -2516,6 +2519,20 @@ resource "aws_route_table_association" "instance_vpc_public_route_table_associat
   route_table_id = aws_route_table.instance_vpc_route_table.id
 }
 
+# VPC DNS Query Logging
+resource "aws_route53_resolver_query_log_config_association" "dns_query_log_config_association" {
+  resolver_query_log_config_id = aws_route53_resolver_query_log_config.dns_query_log_config.id
+  resource_id                  = aws_vpc.instance_vpc.id
+}
+resource "aws_route53_resolver_query_log_config" "dns_query_log_config" {
+  name            = "${local.fullname}-dns_query_log_config"
+  destination_arn = aws_cloudwatch_log_group.aws_route53_resolver_log_group.arn
+}
+resource "aws_cloudwatch_log_group" "aws_route53_resolver_log_group" {
+  name = "/aws/cloudwatch_resolver/${local.fullname}"
+  retention_in_days = 30
+}
+
 ####################################
 
 ####################################
@@ -2578,6 +2595,7 @@ resource "aws_lb_target_group" "instance_alb_target_group" {
   health_check {
     interval = 300
     protocol = "HTTP"
+    path = "/"
   }
 }
 resource "aws_lb_target_group_attachment" "instance_alb_target_group_attachment" {
@@ -2690,6 +2708,24 @@ resource "aws_lb_target_group_attachment" "instance_alb_target_group_attachment"
 #   alarm_actions = [var.sns_alarm_topic_arn]
 #   dimensions = {
 #     InstanceId = aws_instance.instance.id
+#   }
+# }
+
+# # Uptime alarm, will sound when uptime fails for >15 minutes
+# resource "aws_cloudwatch_metric_alarm" "uptime_alarm" {
+#   alarm_name                = "${local.fullname}-uptime_alarm"
+#   comparison_operator       = "LessThanThreshold"
+#   evaluation_periods        = "3"
+#   metric_name               = "HealthyHostCount"
+#   namespace                 = "AWS/ApplicationELB"
+#   period                    = 300
+#   statistic                 = "Average"
+#   threshold                 = 0.8
+#   alarm_description         = "This metric monitors ec2 uptime percent"
+#   alarm_actions = [var.sns_alarm_topic_arn]
+#   dimensions = {
+#     TargetGroup = aws_lb_target_group.instance_alb_target_group.arn_suffix
+#     LoadBalancer = aws_lb.instance_alb.arn_suffix
 #   }
 # }
 
@@ -2814,6 +2850,44 @@ output "monitor_widget_json" {
           "title": "${local.servername} Process Counts",
           "region": "us-east-1"
       }
+  },
+  {
+      "height": 3,
+      "width": 6,
+      "y": 6,
+      "x": 12,
+      "type": "metric",
+      "properties": {
+          "view": "timeSeries",
+          "stacked": false,
+          "metrics": [
+              [ "AWS/ApplicationELB", "HealthyHostCount", "TargetGroup", "${aws_lb_target_group.instance_alb_target_group.arn_suffix}", "LoadBalancer", "${aws_lb.instance_alb.arn_suffix}", { "label": "metric", "id": "m1" } ]
+          ],
+          "title": "${local.servername} Healthy",
+          "region": "us-east-1"
+      }
+  },
+  {
+      "height": 3,
+      "width": 6,
+      "y": 9,
+      "x": 12,
+      "type": "metric",
+      "properties": {
+          "sparkline": true,
+          "title": "${local.servername} Uptime Percent",
+          "metrics": [
+              [ "AWS/ApplicationELB", "HealthyHostCount", "TargetGroup", "${aws_lb_target_group.instance_alb_target_group.arn_suffix}", "LoadBalancer", "${aws_lb.instance_alb.arn_suffix}", { "label": "metric", "id": "m1", "visible": false } ],
+              [ { "expression": "m1 < 1", "label": "Value for higher than warning", "id": "warning_or_higher", "visible": false } ],
+              [ { "expression": "m1 >= 1", "label": "Value for lower than warning", "id": "ok", "visible": false } ],
+              [ { "expression": "100*RUNNING_SUM(ok)/(RUNNING_SUM(ok)+RUNNING_SUM(warning_or_higher))", "label": "Uptime", "id": "uptime", "visible": true } ]
+          ],
+          "view": "timeSeries",
+          "stacked": true,
+          "region": "us-east-1",
+          "period": 300,
+          "stat": "Average"
+      }
   }
 EOF
 }
@@ -2868,6 +2942,23 @@ EOF
 #           },
 #           "view": "timeSeries",
 #           "title": "${local.servername} Memory Alarm",
+#           "stacked": false
+#       }
+#   },
+#   {
+#       "type": "metric",
+#       "x": 6,
+#       "y": 0,
+#       "width": 6,
+#       "height": 3,
+#       "properties": {
+#           "annotations": {
+#               "alarms": [
+#                   "${aws_cloudwatch_metric_alarm.uptime_alarm.arn}"
+#               ]
+#           },
+#           "view": "timeSeries",
+#           "title": "${local.servername} Uptime Alarm",
 #           "stacked": false
 #       }
 #   }
