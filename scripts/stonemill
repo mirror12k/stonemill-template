@@ -206,6 +206,8 @@ clean:
 
 build:
 
+test:
+
 ''')
 
 base_dockerfile = Definition("./docker/Dockerfile", text='''FROM ubuntu:22.04
@@ -563,7 +565,6 @@ mkdir modules
 rm -rf my_venv/lib/*/site-packages/*.dist-info \\
   my_venv/lib/*/site-packages/setuptools \\
   my_venv/lib/*/site-packages/pip \\
-  my_venv/lib/*/site-packages/botocore \\
   my_venv/lib/*/site-packages/*/__pycache__
 cp -rf my_venv/lib/*/site-packages/* modules
 rm -rf my_venv/
@@ -572,8 +573,9 @@ zip -r ../../build/{{lambda_name}}.zip . -x build.sh -x "*__pycache__*"
 ''')
 
 base_lambda_requirements = Definition("src/{{lambda_name}}/requirements.txt", text='''
-pyjwt
+boto3
 botocore
+pyjwt
 ''')
 
 sqs_lambda_main = base_lambda_main.but_replace('''res = route_request(event)
@@ -753,6 +755,13 @@ echo "invoking api: $INVOKE_URL"
 curl -X POST "$INVOKE_URL" -H 'content-type: application/json' -d '{"action":"/{{lambda_name}}/hello","msg":"working as intended"}'
 ''')
 
+
+graphql_lambda_makefile = base_lambda_makefile.and_append('''
+test: test_{{lambda_name}}
+test_{{lambda_name}}:
+\tcd ./src/{{lambda_name}} && python3 ./unit_test.py
+''')
+
 graphql_lambda_main = Definition("src/{{lambda_name}}/main.py", text='''import sys
 sys.path.append('modules')
 import os
@@ -904,8 +913,50 @@ class Query(ObjectType):
 schema = Schema(query=Query)
 ''')
 
-graphql_lambda_requirements = Definition("src/{{lambda_name}}/requirements.txt", text='''graphene
+graphql_lambda_unit_test = Definition("src/{{lambda_name}}/unit_test.py", text='''#!/usr/bin/env python3
+import sys
+sys.path.append('modules')
+import os
+import unittest
+
+print('[i] injecting testing env variables...')
+os.environ['API_AUTHORIZATION_SECRET_KEY'] = 'test_key'
+os.environ['API_DOMAIN_NAME'] = 'test.local'
+
+print('[i] importing runtime modules...')
+from schema import schema
+# from models import *
+print('[+] import successful')
+
+class LambdaUnitTests(unittest.TestCase):
+  def test_hello(self):
+    res = schema.execute('query { hello }').formatted
+    self.assertEqual(res['data']['hello'], 'Hello stranger!')
+  def test_hello_name(self):
+    res = schema.execute('query { hello(name:"world") }').formatted
+    self.assertEqual(res['data']['hello'], 'Hello world!')
+  def test_error(self):
+    res = schema.execute('query { missing_action }').formatted
+    self.assertIsNone(res['data'])
+    self.assertIsNotNone(res['errors'])
+  def test_login(self):
+    res = schema.execute('{ login(email:"asdf@example.com", password:"asdfasdf") }').formatted
+    self.assertIsNotNone(res['data']['login'])
+  def test_verify(self):
+    res = schema.execute('{ login(email:"asdf@example.com", password:"asdfasdf") }').formatted
+    self.assertIsNotNone(res['data']['login'])
+    login_token = res['data']['login']
+    res = schema.execute('{ verify }', context={ 'authorization': login_token }).formatted
+    self.assertEqual(res['data']['verify'], 'verified')
+
+unittest.main()
+''')
+
+graphql_lambda_requirements = Definition("src/{{lambda_name}}/requirements.txt", text='''
+boto3
+botocore
 pyjwt
+graphene
 ''')
 graphql_lambda_test = Definition("scripts/test.sh", append=True, text='''
 INVOKE_URL=$(cat infrastructure/terraform.tfstate | jq -r '.outputs.{{lambda_name}}_api_url.value')
@@ -3746,11 +3797,12 @@ test your lambda by invoking:
 
 graphql_lambda_template = TemplateDefinitions('{lambda_name} gql lambda', { 'lambda_name': r"^[a-zA-Z_][a-zA-Z0-9_]+$" }, [
   base_lambda_definition,
-  base_lambda_makefile,
+  graphql_lambda_makefile,
   base_lambda_module,
   graphql_lambda_main,
   graphql_lambda_authorization,
   graphql_lambda_schema,
+  graphql_lambda_unit_test,
   base_lambda_build,
   graphql_lambda_requirements,
 ], '''
@@ -3787,11 +3839,12 @@ test the lambda by executing `./scripts/test.sh`
 
 api_graphql_lambda_template = TemplateDefinitions('{lambda_name} gql lambda', { 'lambda_name': r"^[a-zA-Z_][a-zA-Z0-9_]+$" }, [
   api_lambda_definition,
-  base_lambda_makefile,
+  graphql_lambda_makefile,
   api_lambda_module,
   graphql_lambda_main,
   graphql_lambda_authorization,
   graphql_lambda_schema,
+  graphql_lambda_unit_test,
   base_lambda_build,
   graphql_lambda_requirements,
   graphql_lambda_test,
