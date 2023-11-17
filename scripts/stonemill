@@ -3792,6 +3792,8 @@ test your lambda by invoking:
     --payload $(echo '{ "body": "{\"action\":\"/<LAMBDA_NAME>/hello\"}" }' | base64 -w 0) \\
     /dev/stdout
 
+Use the following command to tail logs in cli:
+  aws logs tail /aws/lambda/<LAMBDA_FULL_NAME> --follow --region us-east-1 &
 ''')
 
 
@@ -3816,6 +3818,9 @@ test your graphql lambda by invoking:
     --function-name <LAMBDA_FULL_NAME> \\
     --payload $(echo '{ "body": "{\"query\":\"{ hello }\"}" }' | base64 -w 0) \\
     /dev/stdout
+
+Use the following command to tail logs in cli:
+  aws logs tail /aws/lambda/<LAMBDA_FULL_NAME> --follow --region us-east-1 &
 ''')
 
 
@@ -3834,6 +3839,9 @@ api lambda scaffolded...
 build the lambda package with `weasel build_{lambda_name}`
 tail logs by using `aws logs tail /aws/lambda/MYLAMBDA_NAME --follow --region us-east-1 &`
 test the lambda by executing `./scripts/test.sh`
+
+Use the following command to tail logs in cli:
+  aws logs tail /aws/lambda/<LAMBDA_FULL_NAME> --follow --region us-east-1 &
 ''')
 
 
@@ -3853,6 +3861,9 @@ api lambda scaffolded...
 build the lambda package with `weasel build_{lambda_name}`
 tail logs by using `aws logs tail /aws/lambda/MYLAMBDA_NAME --follow --region us-east-1 &`
 test the lambda by executing `./scripts/test.sh`
+
+Use the following command to tail logs in cli:
+  aws logs tail /aws/lambda/<LAMBDA_FULL_NAME> --follow --region us-east-1 &
 ''')
 
 
@@ -3871,6 +3882,9 @@ sqs lambda scaffolded...
 build the lambda package with `weasel build_{lambda_name}`
 tail logs by using `aws logs tail /aws/lambda/MYLAMBDA_NAME --follow --region us-east-1 &`
 test the lambda by executing `./scripts/test.sh`
+
+Use the following command to tail logs in cli:
+  aws logs tail /aws/lambda/<LAMBDA_FULL_NAME> --follow --region us-east-1 &
 ''')
 
 
