@@ -3602,6 +3602,96 @@ resource "aws_lambda_permission" "lambda_recurring_event_permission" {
 }
 ''')
 
+s3_bucket_definition = Definition("infrastructure/{{module_name}}/{{module_name}}.tf", append=True, text='''
+
+locals {
+  {{bucket_name}}_fullname = replace("${var.infragroup_fullname}-{{bucket_name}}", "_", "-")
+}
+
+resource "random_id" "{{bucket_name}}_random_id" { byte_length = 8 }
+resource "aws_s3_bucket" "{{bucket_name}}" {
+  bucket = "${local.{{bucket_name}}_fullname}-databkt-${random_id.{{bucket_name}}_random_id.hex}"
+}
+
+output "bucket_id" { value = aws_s3_bucket.{{bucket_name}}.id }
+
+resource "random_id" "{{bucket_name}}_access_log_bucket_random_id" { byte_length = 8 }
+resource "aws_s3_bucket" "{{bucket_name}}_access_log_bucket" {
+  bucket = "${local.{{bucket_name}}_fullname}-logbkt-${random_id.{{bucket_name}}_access_log_bucket_random_id.hex}"
+}
+resource "aws_s3_bucket_metric" "{{bucket_name}}_metric_filter" {
+  bucket = aws_s3_bucket.{{bucket_name}}.id
+  name   = "${local.{{bucket_name}}_fullname}-databkt-filter"
+}
+resource "aws_s3_bucket_lifecycle_configuration" "{{bucket_name}}_access_log_bucket_lifecycle_configuration" {
+  bucket = aws_s3_bucket.{{bucket_name}}_access_log_bucket.id
+
+  rule {
+    id = "expiration_rule"
+    status = "Enabled"
+
+    filter {
+      prefix = "logs/"
+    }
+    expiration {
+      days = 90
+    }
+  }
+}
+
+resource "aws_s3_bucket_policy" "{{bucket_name}}_access_log_bucket_policy" {
+  bucket = aws_s3_bucket.{{bucket_name}}_access_log_bucket.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Principal = {
+        Service = "logging.s3.amazonaws.com"
+      }
+      Action = "s3:PutObject"
+      Resource = "${aws_s3_bucket.{{bucket_name}}_access_log_bucket.arn}/logs/*"
+      Condition = {
+        ArnLike = {
+          "aws:SourceArn" = aws_s3_bucket.{{bucket_name}}.arn
+        }
+      }
+    }]
+  })
+}
+
+resource "aws_s3_bucket_logging" "{{bucket_name}}_logging" {
+  bucket = aws_s3_bucket.{{bucket_name}}.id
+  target_bucket = aws_s3_bucket.{{bucket_name}}_access_log_bucket.id
+  target_prefix = "logs/"
+}
+
+output "access_logging_bucket_id" { value = aws_s3_bucket.{{bucket_name}}_access_log_bucket.id }
+
+output "monitor_widget_json" {
+  value = <<EOF
+  {
+      "type": "metric",
+      "x": 0,
+      "y": 0,
+      "width": 6,
+      "height": 6,
+      "properties": {
+          "metrics": [
+              [ "AWS/S3", "AllRequests", "BucketName", "${aws_s3_bucket.{{bucket_name}}.id}", "FilterId", "${aws_s3_bucket_metric.{{bucket_name}}_metric_filter.name}" ],
+              [ ".", "4xxErrors", ".", ".", ".", "." ],
+              [ ".", "5xxErrors", ".", ".", ".", ".", { "color": "#d62728" } ]
+          ],
+          "view": "timeSeries",
+          "stacked": false,
+          "region": "us-east-1",
+          "stat": "Average",
+          "period": 300
+      }
+  }
+EOF
+}
+''')
+
 terraform_s3_backend = Definition("infrastructure/main.tf", append_if_not_exist=True, text='''
 terraform {
   backend "s3" {
@@ -4156,6 +4246,13 @@ drink up...
 ''')
 
 
+s3_bucket_template = TemplateDefinitions('{bucket_name} s3 bucket', { 'module_name': r"^[a-zA-Z_][a-zA-Z0-9_\-]+$", 'bucket_name': r"^[a-zA-Z_][a-zA-Z0-9_]{1,15}$" }, [
+  s3_bucket_definition,
+], '''
+s3 bucket created in module {module_name}...
+the bucket has access logging and metrics are enabled by default
+''')
+
 lambda_schedule_template = TemplateDefinitions('{lambda_name} lambda schedule event', { 'lambda_name': r"^[a-zA-Z_][a-zA-Z0-9_]+$" }, [
   lambda_schedule_definition,
 ], '''
@@ -4233,6 +4330,7 @@ try:
   parser.add_argument('--crud-ddb-table', nargs=2, help='creates a dynamodb table with graphql endpoints for Create/Read/Update/Delete/List;\n\t uses uuid4 for ids and has strong authentication on the user;\t stonemill --crud-ddb-table my_lambda my_model')
   parser.add_argument('--singleton-crud-ddb-table', nargs=2, help='creates a dynamodb table with graphql endpoints for Create/Read/Update;\n\t only one singleton exists per user;\n\t uses uuid4 for ids and has strong authentication on the user;\t stonemill --singleton-crud-ddb-table my_lambda my_singleton')
   parser.add_argument('--firehose-s3', nargs=1, help='creates a kinesis firehose that puts to an s3 bucket;\t stonemill --firehose-s3 my_firehose_name')
+  parser.add_argument('--s3-bucket', nargs=2, help='creates an s3 bucket in an existing module, with access logging and metrics enabled;\t stonemill --s3-bucket my_lambda data_bucket')
   parser.add_argument('--lambda-schedule-event', nargs=1, help='creates an eventbridge job that triggers lambda on a schedule;\t stonemill --lambda-schedule-event my_lambda')
   parser.add_argument('--githubactions-deploy', nargs=2, help='creates the deployment workflows for github actions to push the terraform infrastructure;\t stonemill --githubactions-deploy "arn:aws:iam::123456789012:role/GithubActionsAccessRole" "tfstate-abcdef0123456789"\n\t follow this guide for how to create your role and secure it to only allow github access: https://benoitboure.com/securely-access-your-aws-resources-from-github-actions')
   parser.add_argument('--ses-domain', action='store_true', help='creates the DKIM records to start the validation process for an SES domain;\t stonemill --ses-domain')
@@ -4301,6 +4399,10 @@ try:
   elif args.firehose_s3:
     template_args = firehose_s3_template.parse_arguments(firehose_name = args.firehose_s3[0])
     firehose_s3_template.mill_template(template_args)
+
+  elif args.s3_bucket:
+    template_args = s3_bucket_template.parse_arguments(module_name = args.s3_bucket[0], bucket_name = args.s3_bucket[1])
+    s3_bucket_template.mill_template(template_args)
 
   elif args.lambda_schedule_event:
     template_args = lambda_schedule_template.parse_arguments(lambda_name = args.lambda_schedule_event[0])
