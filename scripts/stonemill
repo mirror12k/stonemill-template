@@ -778,9 +778,21 @@ cloudwatch_client = boto3.client('cloudwatch')
 metrics_group = os.environ.get('METRICS_GROUP')
 
 def internal_lambda_handler(event, context):
+  # get the json data from the body
+  try:
+    body = json.loads(str(event['body']))
+  except ValueError as e:
+    print('[!] error parsing json body:', e)
+    return { 'success': False, 'error': 'invalid request' }
+  # check the query
+  if body.get('query') is None:
+    print('[!] missing query')
+    return { 'success': False, 'error': 'invalid request' }
+
+  # execute schema
   result = schema.execute(body['query'],
       variables=body.get('variables', {}),
-      context={ 'authorization': event['headers'].get('authorization') })
+      context={ 'authorization': event.get('headers', {}).get('authorization') })
   # print('[r] graphql result:', result.data)
   return result.formatted
 
