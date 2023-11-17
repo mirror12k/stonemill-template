@@ -2338,6 +2338,11 @@ bastion_ec2_server_module = ec2_server_module.but_replace('''server_config = {}'
   domain_name = local.domain_name
   # domain_acm_cert_arn = local.domain_acm_cert_arn
 ''')
+bastion_ec2_server_makefile = ec2_server_makefile.and_append('''
+reinforce: reinforce_{{server_name}}
+reinforce_{{server_name}}:
+\t./scripts/buoy-mine "{{server_name}}"
+''')
 bastion_ec2_server_definition = Definition("infrastructure/{{server_name}}/{{server_name}}.tf", text='''
 variable "infragroup_fullname" { type = string }
 variable "sns_alarm_topic_arn" { type = string }
@@ -3827,7 +3832,7 @@ bastion_ec2_server_template = TemplateDefinitions('{server_name} bastion server'
   'server_name': r"^[a-zA-Z_][a-zA-Z0-9_]+$",
 }, [
   bastion_ec2_server_module,
-  ec2_server_makefile,
+  bastion_ec2_server_makefile,
   bastion_ec2_server_definition,
   bastion_ec2_server_install_sh,
   bastion_ec2_server_startup_sh,
