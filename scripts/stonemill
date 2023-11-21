@@ -357,11 +357,11 @@ resource "aws_iam_policy" "lambda_policy" {
     Version = "2012-10-17"
     Statement = [{
       Effect = "Allow"
-      Action = "logs:CreateLogGroup"
-      Resource = "*"
-    }, {
-      Effect = "Allow"
-      Action = [ "logs:CreateLogStream", "logs:PutLogEvents" ]
+      Action = [
+        "logs:CreateLogStream"
+        "logs:PutLogEvents"
+        "logs:CreateLogGroup"
+      ]
       Resource = "*"
     }, {
       Effect = "Allow"
@@ -1980,6 +1980,12 @@ resource "aws_iam_policy_attachment" "instance_policy_attachment" {
   roles      = [aws_iam_role.instance_role.name]
   policy_arn = aws_iam_policy.instance_policy.arn
 }
+# SSM policy is needed for AWS SSM to work on the instance
+resource "aws_iam_policy_attachment" "instance_managed_policy_attachment" {
+  name       = "${local.fullname}-instance_managed_policy_attachment"
+  roles      = [aws_iam_role.instance_role.name]
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
 
 
 resource "random_id" "deploy_bucket_random_id" { byte_length = 24 }
@@ -2476,6 +2482,7 @@ resource "aws_iam_policy" "instance_policy" {
       "Action": [
         "cloudwatch:PutMetricData",
         "logs:PutLogEvents",
+        "logs:CreateLogGroup",
         "logs:CreateLogStream",
         "logs:PutLogEvents"
       ],
@@ -2493,13 +2500,10 @@ resource "aws_iam_policy_attachment" "instance_policy_attachment" {
   policy_arn = aws_iam_policy.instance_policy.arn
 }
 # SSM policy is needed for AWS SSM to work on the instance
-data "aws_iam_policy" "AmazonSSMManagedInstanceCore" {
-  arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
-}
 resource "aws_iam_policy_attachment" "instance_managed_policy_attachment" {
   name       = "${local.fullname}-instance_managed_policy_attachment"
   roles      = [aws_iam_role.instance_role.name]
-  policy_arn = data.aws_iam_policy.AmazonSSMManagedInstanceCore.arn
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 ####################################
 
@@ -3224,6 +3228,12 @@ resource "aws_iam_policy_attachment" "instance_policy_attachment" {
   name       = "${local.fullname}-instance_policy_attachment"
   roles      = [aws_iam_role.instance_role.name]
   policy_arn = aws_iam_policy.instance_policy.arn
+}
+# SSM policy is needed for AWS SSM to work on the instance
+resource "aws_iam_policy_attachment" "instance_managed_policy_attachment" {
+  name       = "${local.fullname}-instance_managed_policy_attachment"
+  roles      = [aws_iam_role.instance_role.name]
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
 
