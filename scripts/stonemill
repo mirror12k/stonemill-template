@@ -478,18 +478,18 @@ def route_sqs_request(event):
   return results
 
 def route_request(event):
+  # get the path parameter as the action
+  action = event.get('rawPath', '')
+  if not action:
+    print('[!] missing action')
+    return {'success': False, 'error': 'invalid request'}
+
   # get the json data from the body
   try:
     data = json.loads(str(event['body']))
   except ValueError as e:
     print('[!] error parsing json body:', e)
     return { 'success': False, 'error': 'invalid request' }
-
-  # parse the action
-  if data.get('action') is None:
-    print('[!] missing action')
-    return { 'success': False, 'error': 'invalid request' }
-  action = str(data['action'])
 
   # try to route it
   route_fun = lambda_routing.get_route(action)
@@ -719,7 +719,7 @@ resource "aws_apigatewayv2_integration" "apigw_integration" {
 resource "aws_apigatewayv2_route" "apigw_route" {
   api_id = aws_apigatewayv2_api.gateway_api.id
 
-  route_key = "POST /"
+  route_key = "POST /{proxy+}"
   target    = "integrations/${aws_apigatewayv2_integration.apigw_integration.id}"
 }
 
@@ -760,7 +760,7 @@ output "api_url" { value = "${aws_apigatewayv2_stage.gateway_stage.invoke_url}" 
 api_lambda_test = Definition("scripts/test.sh", append=True, text='''
 INVOKE_URL=$(cat infrastructure/terraform.tfstate | jq -r '.outputs.{{lambda_name}}_api_url.value')
 echo "invoking api: $INVOKE_URL"
-curl -X POST "$INVOKE_URL" -H 'content-type: application/json' -d '{"action":"/{{lambda_name}}/hello","msg":"working as intended"}'
+curl -X POST "$INVOKE_URL/{{lambda_name}}/hello" -H 'content-type: application/json' -d '{"msg":"working as intended"}'
 ''')
 
 
