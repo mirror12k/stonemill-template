@@ -258,7 +258,7 @@ CMD make bash
 ''')
 
 base_docker_run = Definition("./docker/run", text='''#!/bin/bash
-(set -o allexport && source 'docker/.env' && set +o allexport && ./docker/aws-authenticate.sh)
+(set -o allexport && source 'docker/.env' && set +o allexport && bash docker/aws-authenticate.sh)
 IMAGE_TAG=$(echo "local-${PWD##*/}" | tr '[:upper:]' '[:lower:]')
 docker image inspect "$IMAGE_TAG" > /dev/null || docker build docker -t "$IMAGE_TAG"
 docker run --rm --cap-drop=all \\
