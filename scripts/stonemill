@@ -119,9 +119,13 @@ base_terraform_main = Definition("infrastructure/main.tf", text='''provider "aws
 
   default_tags {
     tags = {
-      Name = "${local.infragroup_fullname}"
+      Project = "${local.infragroup_fullname}"
     }
   }
+}
+
+terraform {
+  backend "local" {}
 }
 
 variable "company_name" { default = "{{company_name}}" }
@@ -149,7 +153,7 @@ name = "${local.infragroup_fullname}-resourcegroup"
   "ResourceTypeFilters": ["AWS::AllSupported"],
   "TagFilters": [
     {
-      "Key": "Name",
+      "Key": "Project",
       "Values": ["${local.infragroup_fullname}"]
     }
   ]
@@ -180,8 +184,8 @@ resource "aws_sns_topic_subscription" "alarm_email_target" {
 }
 ''')
 
-base_backend_beta_config = Definition("./config/backend-config.beta.hcl", text='''''')
-base_backend_prod_config = Definition("./config/backend-config.prod.hcl", text='''''')
+base_backend_beta_config = Definition("./infrastructure/config/backend-config.beta.hcl", text='''''')
+base_backend_prod_config = Definition("./infrastructure/config/backend-config.prod.hcl", text='''''')
 base_test_sh = Definition("./scripts/test.sh", text='''#!/bin/bash
 ''')
 
