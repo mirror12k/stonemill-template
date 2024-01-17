@@ -180,23 +180,26 @@ resource "aws_sns_topic_subscription" "alarm_email_target" {
 }
 ''')
 
-base_envfile = Definition(".env", text='''''', append=True, ignore_missing=True)
+base_backend_beta_config = Definition("./config/backend-config.beta.hcl", text='''''')
+base_backend_prod_config = Definition("./config/backend-config.prod.hcl", text='''''')
+base_test_sh = Definition("./scripts/test.sh", text='''#!/bin/bash
+''')
 
 base_makefile = Definition("./Makefile", text='''
-include .env
-export
-
 configure:
-\t./scripts/aws-authenticate-mfa.sh
 
 bash: configure
 \tbash
 
 deploy:
 \t./scripts/deploy.sh -deploy
-
 destroy:
 \t./scripts/deploy.sh -destroy
+
+prod_deploy:
+\t./scripts/deploy.sh -deploy -prod
+prod_destroy:
+\t./scripts/deploy.sh -destroy -prod
 
 output:
 \tterraform -chdir=infrastructure output && read _
@@ -251,12 +254,65 @@ CMD make bash
 ''')
 
 base_docker_run = Definition("./docker/run", text='''#!/bin/bash
-IMAGE_TAG="local-${PWD##*/}"
+(set -o allexport && source 'docker/.env' && set +o allexport && ./docker/aws-authenticate.sh)
+IMAGE_TAG=$(echo "local-${PWD##*/}" | tr '[:upper:]' '[:lower:]')
 docker image inspect "$IMAGE_TAG" > /dev/null || docker build docker -t "$IMAGE_TAG"
 docker run --rm --cap-drop=all \\
   -v "$PWD:/app" \\
   -v "$PWD/docker:/app/docker:ro" \\
+  --env-file ".env.temp" \\
   -it $(docker build -q docker -t "$IMAGE_TAG") $@
+''')
+
+base_envfile = Definition("./docker/.env", text='''''')
+base_aws_authenticate = Definition("./docker/aws-authenticate.sh", text='''#!/bin/bash
+set -e
+echo '' > .env.temp
+
+if [[ -z $(aws configure get aws_access_key_id) ]]; then
+    echo "no aws credentials found. skipping configuration..."
+    exit
+fi
+
+AWS_USERNAME=$(aws sts get-caller-identity | jq -r '.Arn | split("/")[1]')
+AWS_MFA_DEVICE_ARN=$(aws iam list-mfa-devices --user-name "$AWS_USERNAME" | jq -r '.MFADevices[0].SerialNumber')
+
+if [[ "$AWS_MFA_DEVICE_ARN" != "null" ]]; then
+    echo -n "please enter your mfa token for device $AWS_MFA_DEVICE_ARN: "
+
+    MFA_TOKEN=""
+    while IFS= read -r -s -n 1 c; do
+        if [[ $c == $'\\0' ]]; then
+            break
+        fi
+        MFA_TOKEN="${MFA_TOKEN}$c"
+        echo -n "*"
+    done
+    echo
+
+    AWS_CREDS=$(aws sts get-session-token --serial-number "$AWS_MFA_DEVICE_ARN" --token-code "$MFA_TOKEN" --duration-seconds 7200)
+    AWS_ACCESS_KEY_ID=$(echo "$AWS_CREDS" | jq -r ".Credentials.AccessKeyId")
+    AWS_SECRET_ACCESS_KEY=$(echo "$AWS_CREDS" | jq -r ".Credentials.SecretAccessKey")
+    AWS_SESSION_TOKEN=$(echo "$AWS_CREDS" | jq -r ".Credentials.SessionToken")
+    echo "aws configured with 2-hour temporary credentials: $AWS_ACCESS_KEY_ID"
+    echo "AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID" >> .env.temp
+    echo "AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY" >> .env.temp
+    echo "AWS_SESSION_TOKEN=$AWS_SESSION_TOKEN" >> .env.temp
+
+    exit
+else
+    echo "no mfa device found, configuring with fixed credentials"
+
+    AWS_CREDS=$(aws sts get-session-token --duration-seconds 7200)
+    AWS_ACCESS_KEY_ID=$(echo "$AWS_CREDS" | jq -r ".Credentials.AccessKeyId")
+    AWS_SECRET_ACCESS_KEY=$(echo "$AWS_CREDS" | jq -r ".Credentials.SecretAccessKey")
+    AWS_SESSION_TOKEN=$(echo "$AWS_CREDS" | jq -r ".Credentials.SessionToken")
+    echo "aws configured with 2-hour temporary credentials: $AWS_ACCESS_KEY_ID"
+    echo "AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID" >> .env.temp
+    echo "AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY" >> .env.temp
+    echo "AWS_SESSION_TOKEN=$AWS_SESSION_TOKEN" >> .env.temp
+    exit
+fi
 ''')
 
 base_gitignore = Definition("./.gitignore", text='''build
@@ -3807,18 +3863,30 @@ infra_base_template = TemplateDefinitions('{infra_name} infra', {
   'infra_name': r"^[a-zA-Z_][a-zA-Z0-9_\-]+$"
 }, [
   base_terraform_main,
-  base_envfile,
+  base_backend_beta_config,
+  base_backend_prod_config,
+  base_test_sh,
   base_makefile,
   base_dockerfile,
   base_docker_run,
+  base_envfile,
+  base_aws_authenticate,
   base_gitignore,
 ], '''
 base infrastructure established...
 
 to run:
-  [optional] put your `AWS_ACCESS_KEY_ID=` and `AWS_SECRET_ACCESS_KEY=` into a .aws.credentials file here
+  put your aws configuration properties into `docker/.env`, such as: `AWS_PROFILE=my_profile`
   do `chmod +x ./docker/run`
   execute with `./docker/run`
+
+[optionally] set up your backend config:
+  Put the following into your backend-config.beta.hcl:
+```
+bucket = "my-tfstate-bucket"
+key    = "beta/terraform.tfstate"
+region = "us-east-1"
+```
 
 deploy with `weasel deploy`
 destroy and clean with `weasel destroy clean`
