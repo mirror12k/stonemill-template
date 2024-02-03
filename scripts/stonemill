@@ -1,30 +1,34 @@
 #!/usr/bin/env python3
 
 import os
+import stat
 import sys
 import re
 import argparse
 
 
 class Definition(object):
-  def __init__(self, filepath, text, append=False, append_if_not_exist=False, ignore_missing=False):
+  def __init__(self, filepath, text, append=False, append_if_not_exist=False, ignore_missing=False, make_executable=False):
     super(Definition, self).__init__()
     self.filepath = filepath
     self.text = text
     self.append = append
     self.append_if_not_exist = append_if_not_exist
     self.ignore_missing = ignore_missing
+    self.make_executable = make_executable
   def but_replace(self, key, replacement):
     return Definition(filepath=self.filepath,
         append=self.append,
         append_if_not_exist=self.append_if_not_exist,
         ignore_missing=self.ignore_missing,
+        make_executable=self.make_executable,
         text=self.text.replace(key, replacement))
   def and_append(self, addendum):
     return Definition(filepath=self.filepath,
         append=self.append,
         append_if_not_exist=self.append_if_not_exist,
         ignore_missing=self.ignore_missing,
+        make_executable=self.make_executable,
         text=self.text + addendum)
   def substitute_filepath(self, **args):
     t = self.filepath
@@ -79,6 +83,19 @@ class Definition(object):
       print('[+] writing to', filepath)
       with open(filepath, 'w') as f:
         f.write(text)
+
+    if self.make_executable:
+      self.add_executable_permission(filepath)
+
+  def add_executable_permission(self, filepath):
+    if not os.path.exists(filepath):
+      raise Exception(f"The file {filepath} does not exist.")
+    
+    current_permissions = stat.S_IMODE(os.lstat(filepath).st_mode)
+    new_permissions = current_permissions | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+    os.chmod(filepath, new_permissions)
+    # print(f"[+] chmod +x {filepath}")
+
 
 class TemplateDefinitions(object):
   def __init__(self, message, arguments, definitions, post_message, unformatted_post_message=None, fixed_args={}):
@@ -186,24 +203,20 @@ resource "aws_sns_topic_subscription" "alarm_email_target" {
 
 base_backend_beta_config = Definition("./infrastructure/config/backend-config.beta.hcl", text='''''')
 base_backend_prod_config = Definition("./infrastructure/config/backend-config.prod.hcl", text='''''')
-base_test_sh = Definition("./scripts/test.sh", text='''#!/bin/bash
+base_test_sh = Definition("./scripts/test.sh", make_executable=True, text='''#!/bin/bash
 ''')
 
 base_makefile = Definition("./Makefile", text='''
-configure:
-
-bash: configure
-\tbash
 
 deploy:
-\t./scripts/deploy.sh -deploy
+\t./infrastructure/tools/deploy.sh -deploy
 destroy:
-\t./scripts/deploy.sh -destroy
+\t./infrastructure/tools/deploy.sh -destroy
 
 prod_deploy:
-\t./scripts/deploy.sh -deploy -prod
+\t./infrastructure/tools/deploy.sh -deploy -prod
 prod_destroy:
-\t./scripts/deploy.sh -destroy -prod
+\t./infrastructure/tools/deploy.sh -destroy -prod
 
 output:
 \tterraform -chdir=infrastructure output && read _
@@ -214,8 +227,6 @@ clean:
 build:
 
 test:
-
-reinforce:
 
 ''')
 
@@ -244,20 +255,19 @@ RUN apt-get update && apt-get install -y gnupg software-properties-common curl \
   && dpkg -i session-manager-plugin.deb \\
   && rm session-manager-plugin.deb
 
-RUN ln -s /app/scripts/weasel /usr/bin/weasel
-RUN ln -s /app/scripts/stonemill /usr/bin/stonemill
+RUN pip install weasel-make
 
 # safety measure to drop privileges to lowly user
 RUN useradd -ms /bin/bash runuser
 USER runuser
 
-RUN echo ". /app/scripts/weasel_autocomplete" >> ~/.bashrc
+RUN echo 'source <(weasel --bash-autocompletions-source)' >> ~/.bashrc
 
-CMD make bash
+CMD bash
 
 ''')
 
-base_docker_run = Definition("./docker/run", text='''#!/bin/bash
+base_docker_run = Definition("./docker/run", make_executable=True, text='''#!/bin/bash
 (set -o allexport && source 'docker/.env' && set +o allexport && bash docker/aws-authenticate.sh)
 IMAGE_TAG=$(echo "local-${PWD##*/}" | tr '[:upper:]' '[:lower:]')
 docker image inspect "$IMAGE_TAG" > /dev/null || docker build docker -t "$IMAGE_TAG"
@@ -269,7 +279,7 @@ docker run --rm --cap-drop=all \\
 ''')
 
 base_envfile = Definition("./docker/.env", text='''''')
-base_aws_authenticate = Definition("./docker/aws-authenticate.sh", text='''#!/bin/bash
+base_aws_authenticate = Definition("./docker/aws-authenticate.sh", make_executable=True, text='''#!/bin/bash
 set -e
 echo '' > .env.temp
 
@@ -317,6 +327,141 @@ else
     echo "AWS_SESSION_TOKEN=$AWS_SESSION_TOKEN" >> .env.temp
     exit
 fi
+''')
+base_create_keys = Definition("./infrastructure/tools/create-keys.sh", make_executable=True, text='''#!/bin/bash
+cd "$(dirname "$0")" && cd ../..
+
+KEYPATH=$1
+if [[ ! -f ".keys/$KEYPATH" ]]; then
+  mkdir -p .keys/
+  ssh-keygen -m PEM -t rsa -b 2048 -f ".keys/$KEYPATH" -q -N ""
+fi
+''')
+base_deploy = Definition("./infrastructure/tools/deploy.sh", make_executable=True, text='''#!/bin/bash
+set -e
+cd "$(dirname "$0")" && cd ../..
+
+ACTION=$1
+STAGE="beta" # Default stage
+
+usage() {
+    echo "Usage: $0 -deploy [-prod]"
+    echo "       $0 -autodeploy [-prod]"
+    echo "       $0 -destroy [-prod]"
+    echo "Options:"
+    echo "       -deploy         Deploy the infrastructure"
+    echo "       -autodeploy     Deploy the infrastructure without manual confirmation"
+    echo "       -destroy        Destroy the infrastructure"
+    echo "       -prod           Set the stage to production"
+    exit 1
+}
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -deploy)
+            ACTION="deploy"
+            shift
+            ;;
+        -autodeploy)
+            ACTION="autodeploy"
+            shift
+            ;;
+        -destroy)
+            ACTION="destroy"
+            shift
+            ;;
+        -prod)
+            STAGE="prod"
+            shift
+            ;;
+        *)
+            usage
+            ;;
+    esac
+done
+
+if [ -z "$ACTION" ]; then
+    echo "Error: No action specified."
+    usage
+fi
+
+cd infrastructure
+
+echo "[i] running init"
+terraform init "-backend-config=config/backend-config.$STAGE.hcl"
+
+case "$ACTION" in
+    deploy)
+        echo "[i] running deployment!"
+        terraform apply -var "stage=${STAGE}"
+        ;;
+    autodeploy)
+        echo "[i] running auto deployment!"
+        terraform apply -auto-approve -var "stage=${STAGE}"
+        ;;
+    destroy)
+        echo "[i] running destroy!!!"
+        terraform destroy -var "stage=${STAGE}"
+        ;;
+esac
+
+echo "[i] done!"
+''')
+base_server_state = Definition("./scripts/server-state.sh", make_executable=True, text='''#!/bin/bash
+set -e
+cd "$(dirname "$0")" && cd ..
+
+INSTANCE_ID=$(cat "infrastructure/terraform.tfstate" | jq -r ".outputs.instance_id.value")
+echo "INSTANCE_ID: $INSTANCE_ID"
+
+ACTION=$1
+if [[ "$ACTION" == "stop" ]]; then
+  echo "[i] running stop..."
+  aws ec2 stop-instances --region us-east-1 --instance-ids "$INSTANCE_ID"
+elif [[ "$ACTION" == "start" ]]; then
+  echo "[i] running start"
+  aws ec2 start-instances --region us-east-1 --instance-ids "$INSTANCE_ID"
+fi
+
+echo "[i] done!"
+''')
+base_ssh_into = Definition("./scripts/ssh-into.sh", make_executable=True, text='''#!/bin/sh
+cd "$(dirname "$0")" && cd ..
+
+INSTANCE_NAME=$1
+
+if [ "$INSTANCE_NAME" = "" ]; then
+    echo "[!] missing instance name argument!"
+    exit
+fi
+
+echo "[+] getting instance ip from infrastructure..."
+INSTANCE_ID=$(cat "infrastructure/terraform.tfstate" | jq -r ".outputs.${INSTANCE_NAME}_instance_id.value")
+
+echo "INSTANCE_ID: $INSTANCE_ID"
+INSTANCE_IP=$(aws ec2 describe-instances --region "us-east-1" \\
+  --filters "Name=instance-state-name,Values=running" "Name=instance-id,Values=$INSTANCE_ID" \\
+  --query 'Reservations[*].Instances[*].[PublicIpAddress]' \\
+  --output text)
+echo "INSTANCE_IP: $INSTANCE_IP"
+
+SSH_COMMAND="ssh -i .keys/${INSTANCE_NAME}_key ubuntu@${INSTANCE_IP} -o StrictHostKeyChecking=no"
+echo "[+] executing ssh: $SSH_COMMAND"
+sh -c "$SSH_COMMAND"
+''')
+base_ssm_into = Definition("./scripts/ssm-into.sh", make_executable=True, text='''#!/bin/sh
+cd "$(dirname "$0")" && cd ..
+
+INSTANCE_NAME=$1
+
+if [ "$INSTANCE_NAME" = "" ]; then echo "[!] missing instance name argument!"; exit; fi
+
+echo "[i] getting instance id from infrastructure..."
+INSTANCE_ID=$(cat "infrastructure/terraform.tfstate" | jq -r ".outputs.${INSTANCE_NAME}_instance_id.value")
+if [ "$INSTANCE_ID" = "null" ]; then echo "[!] instance id not found for name '$INSTANCE_NAME'!"; exit; fi
+
+echo "[+] logging in to ssm: $INSTANCE_ID"
+aws ssm start-session --target "$INSTANCE_ID" --reason "manual login" --region us-east-1 --document-name AWS-StartInteractiveCommand --parameters command="cd /app && sudo su ubuntu"
 ''')
 
 base_gitignore = Definition("./.gitignore", text='''build
@@ -1921,7 +2066,7 @@ build: build_{{server_name}}_package
 build_{{server_name}}_package:
 \t-mkdir build
 \tcd src && zip ../build/{{server_name}}.zip -FSr {{server_name}}/
-\t./scripts/create-keys.sh "{{server_name}}_key"
+\t./infrastructure/tools/create-keys.sh "{{server_name}}_key"
 ''')
 ec2_server_definition = Definition("infrastructure/{{server_name}}/{{server_name}}.tf", text='''
 variable "infragroup_fullname" { type = string }
@@ -2428,11 +2573,6 @@ ec2_server_cwagent_cfg = Definition("src/{{server_name}}/amazon-cloudwatch-agent
 bastion_ec2_server_module = ec2_server_module.but_replace('''server_config = {}''', '''server_config = {}
   domain_name = local.domain_name
   # domain_acm_cert_arn = local.domain_acm_cert_arn
-''')
-bastion_ec2_server_makefile = ec2_server_makefile.and_append('''
-reinforce: reinforce_{{server_name}}
-reinforce_{{server_name}}:
-\t./scripts/buoy-mine "{{server_name}}"
 ''')
 bastion_ec2_server_definition = Definition("infrastructure/{{server_name}}/{{server_name}}.tf", text='''
 variable "infragroup_fullname" { type = string }
@@ -3838,7 +3978,7 @@ jobs:
           make build
       - name: deploy
         run: |
-          ./scripts/deploy.sh -autodeploy
+          ./infrastructure/tools/deploy.sh -autodeploy
 
 ''')
 
@@ -3869,26 +4009,31 @@ infra_base_template = TemplateDefinitions('{infra_name} infra', {
   base_terraform_main,
   base_backend_beta_config,
   base_backend_prod_config,
-  base_test_sh,
   base_makefile,
   base_dockerfile,
   base_docker_run,
   base_envfile,
   base_aws_authenticate,
+  base_create_keys,
+  base_deploy,
+  base_server_state,
+  base_ssh_into,
+  base_ssm_into,
+  base_test_sh,
   base_gitignore,
 ], '''
 base infrastructure established...
 
 to run:
   put your aws configuration properties into `docker/.env`, such as: `AWS_PROFILE=my_profile`
-  do `chmod +x ./docker/run`
   execute with `./docker/run`
 
-[optionally] set up your backend config:
-  Put the following into your backend-config.beta.hcl:
+[optional] set up your s3 backend config:
+  Change the backend in main.tf to be `backend "s3"`,
+  and put the following into your backend-config.beta.hcl:
 ```
 bucket = "my-tfstate-bucket"
-key    = "beta/terraform.tfstate"
+key    = "{company_name}/{infra_name}/beta/terraform.tfstate"
 region = "us-east-1"
 ```
 
@@ -3943,7 +4088,7 @@ bastion_ec2_server_template = TemplateDefinitions('{server_name} bastion server'
   'server_name': r"^[a-zA-Z_][a-zA-Z0-9_]+$",
 }, [
   bastion_ec2_server_module,
-  bastion_ec2_server_makefile,
+  ec2_server_makefile,
   bastion_ec2_server_definition,
   bastion_ec2_server_install_sh,
   bastion_ec2_server_startup_sh,
